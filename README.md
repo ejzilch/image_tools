@@ -89,7 +89,6 @@ image_tools/
 
 ## 📦 主要依賴
 
-```
 | 套件 | 用途 |
 |------|------|
 | `tauri` | 桌面應用框架 |
@@ -98,4 +97,3 @@ image_tools/
 | `mozjpeg` | JPEG 高速 decode / encode |
 | `rayon` | 多核心平行處理 |
 | `tokio` | 非同步執行環境 |
-```
