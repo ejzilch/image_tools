@@ -74,6 +74,11 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
 
+      - name: List bundle output
+        if: matrix.os == 'macos-latest'
+        run: find src-tauri/target/${{ matrix.target }}/release/bundle -type f
+
+
 # .msi for Windows
 # .dmg for Intel Mac
 # .dmg for M1/M2/M3 Mac
