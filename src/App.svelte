@@ -2,6 +2,8 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import { load } from "@tauri-apps/plugin-store";
+  import { onMount } from "svelte";
 
   // 狀態
   let selectedFiles = [];
@@ -14,6 +16,7 @@
   let targetSize = "";
   let targetUnit = "kb";
   let isProcessing = false;
+  let wmBold = false;
 
   // 進度
   let progress = { current: 0, total: 0 };
@@ -22,14 +25,26 @@
   let isDone = false;
   let unlistenFn = null;
 
+  // 浮水印設定
+  let enableWatermark = false;
+  let showWatermarkSettings = false;
+  let wmText = "";
+  let wmFontName = "NotoSans";
+  let wmPosition = "bottom-right";
+  let wmOpacity = 70;
+  let wmColor = "#ffffff";
+  let wmFontSize = 40;
+
   // 彈窗
   let alertMessage = "";
   let showAlert = false;
-  let closeAlert = () => {};
+  /** @type {(value?: unknown) => void} */
+  let closeAlert = (_value) => {};
 
   let confirmMessage = "";
   let showConfirm = false;
-  let resolveConfirm = () => {};
+  /** @type {(value?: unknown) => void} */
+  let resolveConfirm = (_value) => {};
 
   // 工具函式
   function toggleOptions() {
@@ -39,6 +54,20 @@
   function handleClickOutside(e) {
     if (!e.target.closest(".picker")) showOptions = false;
   }
+
+  onMount(async () => {
+    const store = await load("settings.json");
+    const saved = await store.get("watermark");
+    if (saved) {
+      wmText = saved.text ?? "";
+      wmFontName = saved.fontName ?? "NotoSans";
+      wmPosition = saved.position ?? "bottom-right";
+      wmOpacity = saved.opacity ?? 70;
+      wmColor = saved.color ?? "#ffffff";
+      wmFontSize = saved.fontSize ?? 40;
+      wmBold = saved.bold ?? false;
+    }
+  });
 
   async function pickFiles() {
     showOptions = false;
@@ -71,6 +100,7 @@
     }
   }
 
+  /** @param {string} msg */
   async function showWarning(msg) {
     alertMessage = msg;
     showAlert = true;
@@ -81,7 +111,7 @@
 
   function dismissAlert() {
     showAlert = false;
-    closeAlert();
+    closeAlert(undefined);
   }
 
   async function showConfirmDialog(msg) {
@@ -106,6 +136,13 @@
     if (selectedFiles.length === 0) {
       await showWarning("請先選擇檔案");
       return false;
+    }
+
+    if (enableWatermark || mode === "watermark") {
+      if (!wmText) {
+        await showWarning("請輸入浮水印文字");
+        return false;
+      }
     }
 
     if (mode === "shrink") {
@@ -179,12 +216,44 @@
           width: Number(width),
           height: Number(height),
           ratio: Number(ratio),
+          watermark: enableWatermark
+            ? {
+                text: wmText,
+                position: wmPosition,
+                opacity: (100 - wmOpacity) / 100,
+                color: hexToRgb(wmColor),
+                fontSize: wmFontSize,
+                bold: wmBold,
+              }
+            : null,
+        });
+      } else if (mode === "watermark") {
+        await invoke("watermark_only", {
+          inputs: selectedFiles,
+          watermark: {
+            text: wmText,
+            position: wmPosition,
+            opacity: (100 - wmOpacity) / 100,
+            color: hexToRgb(wmColor),
+            fontSize: wmFontSize,
+            bold: wmBold,
+          },
         });
       } else {
         await invoke("compress_image", {
           inputs: selectedFiles,
           targetBytes:
             Number(targetSize) * (targetUnit === "kb" ? 1024 : 1024 * 1024),
+          watermark: enableWatermark
+            ? {
+                text: wmText,
+                position: wmPosition,
+                opacity: (100 - wmOpacity) / 100,
+                color: hexToRgb(wmColor),
+                fontSize: wmFontSize,
+                bold: wmBold,
+              }
+            : null,
         });
       }
     } catch (e) {
@@ -204,6 +273,42 @@
     progress = { current: 0, total: 0 };
   }
 
+  function onWatermarkToggle() {
+    if (enableWatermark) showWatermarkSettings = true;
+  }
+
+  async function saveWatermarkSettings() {
+    const store = await load("settings.json");
+    await store.set("watermark", {
+      text: wmText,
+      fontName: wmFontName,
+      position: wmPosition,
+      opacity: wmOpacity,
+      color: wmColor,
+      fontSize: wmFontSize,
+      bold: wmBold,
+    });
+    await store.save();
+    showWatermarkSettings = false;
+  }
+
+  function resetWatermarkSettings() {
+    wmText = "";
+    wmFontName = "NotoSans";
+    wmPosition = "bottom-right";
+    wmOpacity = 70;
+    wmColor = "#ffffff";
+    wmFontSize = 40;
+  }
+
+  function hexToRgb(hex) {
+    return [
+      parseInt(hex.slice(1, 3), 16),
+      parseInt(hex.slice(3, 5), 16),
+      parseInt(hex.slice(5, 7), 16),
+    ];
+  }
+
   // Reactive
   $: selectedLabel =
     selectedFiles.length === 0
@@ -219,7 +324,6 @@
 <svelte:window on:click={handleClickOutside} />
 
 <main>
-  <!-- 警告彈窗 -->
   {#if showAlert}
     <div class="overlay">
       <div class="dialog-box">
@@ -229,6 +333,7 @@
     </div>
   {/if}
 
+  <!-- 警告彈窗 -->
   {#if showConfirm}
     <div class="overlay">
       <div class="dialog-box">
@@ -236,6 +341,82 @@
         <div class="dialog-buttons">
           <button class="btn-ok" on:click={confirmOk}>確定</button>
           <button class="btn-cancel" on:click={confirmCancel}>取消</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if showWatermarkSettings}
+    <div class="overlay">
+      <div class="dialog-box watermark-dialog">
+        <p class="label">浮水印設定</p>
+
+        <div class="wm-field-row">
+          <label for="wm-opacity">文字</label>
+          <input
+            type="text"
+            bind:value={wmText}
+            placeholder="© 2026 Your Name"
+          />
+        </div>
+
+        <div class="wm-field-row">
+          <label for="select-wrapper">字型</label>
+          <div class="select-wrapper">
+            <select bind:value={wmFontName}>
+              <option value="NotoSans">Noto Sans</option>
+              <option value="NotoSerif">Noto Serif</option>
+              <option value="RobotoMono">Roboto Mono</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="wm-field-row">
+          <label for="color">顏色</label>
+          <input type="color" bind:value={wmColor} />
+          <button
+            class="bold-btn"
+            class:active={wmBold}
+            on:click={() => (wmBold = !wmBold)}
+          >
+            <b>B</b>
+          </button>
+        </div>
+
+        <div class="wm-field-row">
+          <label for="range">透明度　{wmOpacity}%</label>
+          <input type="range" min="0" max="100" bind:value={wmOpacity} />
+        </div>
+
+        <div class="wm-field-row">
+          <label for="number">字體大小</label>
+          <input type="number" bind:value={wmFontSize} min="10" max="200" />
+          <span>px</span>
+        </div>
+
+        <div class="wm-field-row">
+          <label for="select-wrapper">位置</label>
+          <div class="select-wrapper">
+            <select bind:value={wmPosition}>
+              <option value="top-left">左上</option>
+              <option value="top-right">右上</option>
+              <option value="bottom-left">左下</option>
+              <option value="bottom-right">右下</option>
+              <option value="tiled">橫向滿版</option>
+              <option value="diagonal">斜向對角</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="dialog-buttons" style="margin-top: 1rem;">
+          <button class="btn-ok" on:click={saveWatermarkSettings}>儲存</button>
+          <button class="btn-cancel" on:click={resetWatermarkSettings}
+            >重置</button
+          >
+          <button
+            class="btn-cancel"
+            on:click={() => (showWatermarkSettings = false)}>關閉</button
+          >
         </div>
       </div>
     </div>
@@ -269,85 +450,111 @@
           <label
             ><input type="radio" bind:group={mode} value="compress" /> 壓縮</label
           >
+          <label
+            ><input type="radio" bind:group={mode} value="watermark" /> 浮水印</label
+          >
+        </div>
+      </section>
+
+      <section>
+        <p class="label">浮水印</p>
+        <div class="wm-row">
+          <label class="checkbox-label">
+            <input
+              type="checkbox"
+              bind:checked={enableWatermark}
+              on:change={onWatermarkToggle}
+            />
+            加入浮水印
+          </label>
+          {#if enableWatermark}
+            <button
+              class="wm-settings-btn"
+              on:click={() => (showWatermarkSettings = true)}
+            >
+              ⚙ 設定
+            </button>
+          {/if}
         </div>
       </section>
     </div>
 
     <!-- 右欄 -->
     <div class="col-right">
-      <section>
-        <p class="label">參數設定</p>
+      {#if mode !== "watermark"}
+        <section>
+          <p class="label">參數設定</p>
 
-        {#if mode === "shrink"}
-          <div class="radio-group">
-            <label
-              ><input
-                type="radio"
-                bind:group={shrinkMode}
-                value="dimension"
-                on:change={onShrinkModeChange}
-              /> 指定寬高</label
-            >
-            <label
-              ><input
-                type="radio"
-                bind:group={shrinkMode}
-                value="ratio"
-                on:change={onShrinkModeChange}
-              /> 維持比例縮小</label
-            >
-          </div>
-
-          {#if shrinkMode === "dimension"}
-            <div class="fields-row">
+          {#if mode === "shrink"}
+            <div class="radio-group">
               <label
-                >寬度　<input
-                  type="number"
-                  bind:value={width}
-                  min="1"
-                  max="16383"
-                />（px）</label
+                ><input
+                  type="radio"
+                  bind:group={shrinkMode}
+                  value="dimension"
+                  on:change={onShrinkModeChange}
+                /> 指定寬高</label
               >
               <label
-                >高度　<input
-                  type="number"
-                  bind:value={height}
-                  min="1"
-                  max="16383"
-                />（px）</label
+                ><input
+                  type="radio"
+                  bind:group={shrinkMode}
+                  value="ratio"
+                  on:change={onShrinkModeChange}
+                /> 維持比例縮小</label
               >
             </div>
+
+            {#if shrinkMode === "dimension"}
+              <div class="fields-row">
+                <label
+                  >寬度　<input
+                    type="number"
+                    bind:value={width}
+                    min="1"
+                    max="16383"
+                  />（px）</label
+                >
+                <label
+                  >高度　<input
+                    type="number"
+                    bind:value={height}
+                    min="1"
+                    max="16383"
+                  />（px）</label
+                >
+              </div>
+            {:else}
+              <div class="fields-row">
+                <label
+                  >縮小至　<input
+                    type="number"
+                    bind:value={ratio}
+                    min="1"
+                    max="99"
+                  />（%）</label
+                >
+              </div>
+            {/if}
           {:else}
-            <div class="fields-row">
-              <label
-                >縮小至　<input
-                  type="number"
-                  bind:value={ratio}
-                  min="1"
-                  max="99"
-                />（%）</label
-              >
+            <div class="field-row">
+              <label for="target-size">目標大小</label>
+              <input
+                id="target-size"
+                type="number"
+                bind:value={targetSize}
+                min="1"
+              />
+              <div class="select-wrapper">
+                <select bind:value={targetUnit}>
+                  <option value="kb">KB</option>
+                  <option value="mb">MB</option>
+                </select>
+              </div>
             </div>
           {/if}
-        {:else}
-          <div class="field-row">
-            <label for="target-size">目標大小</label>
-            <input
-              id="target-size"
-              type="number"
-              bind:value={targetSize}
-              min="1"
-            />
-            <div class="select-wrapper">
-              <select bind:value={targetUnit}>
-                <option value="kb">KB</option>
-                <option value="mb">MB</option>
-              </select>
-            </div>
-          </div>
-        {/if}
-      </section>
-
+        </section>
+      {/if}
       <button class="execute" on:click={execute} disabled={isProcessing}>
         {isProcessing ? "處理中..." : "執行"}
       </button>
@@ -696,5 +903,88 @@
   .fail-detail {
     color: #c0392b;
     font-size: 0.9rem;
+  }
+
+  /* 浮水印 */
+  .watermark-dialog {
+    width: 380px;
+    text-align: left;
+    z-index: 101;
+    position: relative;
+  }
+
+  .wm-field-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .wm-field-row label {
+    height: 2rem;
+    min-width: 80px;
+    text-align: left;
+  }
+
+  .wm-field-row input[type="range"] {
+    flex: 1;
+  }
+
+  .wm-field-row input[type="text"] {
+    flex: 1;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background-color: var(--bg-secondary);
+    color: var(--text);
+    font-size: 1rem;
+  }
+
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+  }
+
+  .wm-settings-btn {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.9rem;
+    height: 2rem;
+    box-sizing: border-box;
+  }
+
+  .wm-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    height: 2rem;
+  }
+
+  .bold-btn {
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 1rem;
+    transition: all 0.1s;
+  }
+
+  .bold-btn.active {
+    background: var(--btn-primary-bg);
+    color: var(--btn-primary-text);
+    border-color: var(--btn-primary-bg);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+    font-weight: bold;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .bold-btn.active {
+      background: #ffffff;
+      color: #000000;
+      border-color: #ffffff;
+    }
   }
 </style>
