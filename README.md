@@ -13,7 +13,7 @@
 
 ### 壓縮
 - 壓縮至指定大小（KB / MB）
-- 使用取樣估算演算法，避免暴力 binary search，encode 次數最少化
+- 採用 Binary search 和 &plusmn; 誤差值來提高效率
 - JPEG 使用 `mozjpeg` 加速 decode / encode
 
 ### 通用
