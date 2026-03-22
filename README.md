@@ -101,8 +101,12 @@ image_tools/
 | 套件 | 用途 |
 |------|------|
 | `tauri` | 桌面應用框架 |
+| `serde` & `serde_json` | 序列化/反序列化 |
 | `image` | 圖片格式支援（PNG、WebP 等） |
 | `fast_image_resize` | SIMD 加速 resize |
+| `tauri-plugin-store` | 持久化儲存在本地端 |
 | `mozjpeg` | JPEG 高速 decode / encode |
 | `rayon` | 多核心平行處理 |
 | `tokio` | 非同步執行環境 |
+| `imageproc` | 繪圖演算法 |
+| `ab_glyph` | 處理字體 |
