@@ -18,6 +18,9 @@
   let isProcessing = false;
   let wmBold = false;
   let isDragging = false;
+  let showFileList = false;
+  let renameText = "";
+  let renameMode = "sequence"; // "sequence" | "date_sequence"
 
   // 進度
   let progress = { current: 0, total: 0 };
@@ -214,11 +217,30 @@
       return false;
     }
 
+    if (mode === "rename") {
+      if (!renameText.trim()) {
+        await showWarning("請輸入自訂文字");
+        return false;
+      }
+      // 防止特殊字元造成檔名錯誤
+      if (/[\\/:*?"<>|]/.test(renameText)) {
+        await showWarning('自訂文字不能包含特殊字元：\\ / : * ? " < > |');
+        return false;
+      }
+    }
+
     return true;
   }
 
   async function confirmOverwrite() {
-    const suffix = mode === "shrink" ? "shrink" : "compress";
+    const suffix =
+      mode === "shrink"
+        ? "shrink"
+        : mode === "compress"
+          ? "compress"
+          : mode === "watermark"
+            ? "watermark"
+            : "rename";
     const dirExists = await invoke("check_output_dir_exists", {
       inputPath: selectedFiles[0],
       suffix,
@@ -281,6 +303,12 @@
             fontSize: wmFontSize,
             bold: wmBold,
           },
+        });
+      } else if (mode === "rename") {
+        await invoke("rename_images", {
+          inputs: selectedFiles,
+          customText: renameText.trim(),
+          renameMode,
         });
       } else {
         await invoke("compress_image", {
@@ -366,6 +394,10 @@
 
   $: progressPct =
     progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
+
+  $: if (mode === "watermark") {
+    enableWatermark = true;
+  }
 </script>
 
 <svelte:window on:click={handleClickOutside} />
@@ -469,6 +501,36 @@
     </div>
   {/if}
 
+  {#if showFileList}
+    <div class="overlay">
+      <div class="dialog-box file-list-dialog">
+        <p class="label">已選擇的檔案（共 {selectedFiles.length} 個）</p>
+        <ul class="file-list-modal">
+          {#each selectedFiles as f, i}
+            <li>
+              <span title={f}>{f.split("\\").pop().split("/").pop()}</span>
+              <button class="remove-btn" on:click={() => removeFile(i)}
+                >✕</button
+              >
+            </li>
+          {/each}
+        </ul>
+        <div class="dialog-buttons" style="margin-top: 1rem;">
+          <button class="btn-ok" on:click={() => (showFileList = false)}
+            >關閉</button
+          >
+          <button
+            class="btn-cancel"
+            on:click={() => {
+              selectedFiles = [];
+              showFileList = false;
+            }}>清除全部</button
+          >
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <div class="layout">
     <!-- 左欄 -->
     <div class="col">
@@ -493,21 +555,14 @@
 
         <!-- 已選清單 -->
         {#if selectedFiles.length > 0}
-          <ul class="file-list">
-            {#each selectedFiles as f, i}
-              <li>
-                <span>{f.split("\\").pop().split("/").pop()}</span>
-                <button class="remove-btn" on:click={() => removeFile(i)}
-                  >✕</button
-                >
-              </li>
-            {/each}
-          </ul>
-          <button class="clear-btn" on:click={() => (selectedFiles = [])}
-            >清除全部</button
-          >
+          <div class="file-summary">
+            <span>已選擇 {selectedFiles.length} 個檔案</span>
+            <button class="view-btn" on:click={() => (showFileList = true)}
+              >檢視</button
+            >
+          </div>
         {:else}
-          <p class="selected">尚未選擇</p>
+          <div class="selected">尚未選擇</div>
         {/if}
       </section>
 
@@ -524,6 +579,11 @@
             ><input type="radio" bind:group={mode} value="watermark" /> 浮水印</label
           >
         </div>
+        <div class="radio-group">
+          <label
+            ><input type="radio" bind:group={mode} value="rename" /> 批量更名</label
+          >
+        </div>
       </section>
 
       <section>
@@ -534,6 +594,7 @@
               type="checkbox"
               bind:checked={enableWatermark}
               on:change={onWatermarkToggle}
+              disabled={mode === "watermark"}
             />
             加入浮水印
           </label>
@@ -542,7 +603,21 @@
               class="wm-settings-btn"
               on:click={() => (showWatermarkSettings = true)}
             >
-              ⚙ 設定
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="3" />
+                <path
+                  d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+                />
+              </svg> 設定
             </button>
           {/if}
         </div>
@@ -606,7 +681,8 @@
                 >
               </div>
             {/if}
-          {:else}
+          {/if}
+          {#if mode === "compress"}
             <div class="field-row">
               <label for="target-size">目標大小</label>
               <input
@@ -621,6 +697,37 @@
                   <option value="mb">MB</option>
                 </select>
               </div>
+            </div>
+          {/if}
+          {#if mode === "rename"}
+            <div class="field-row">
+              <label for="rename-text">自訂文字</label>
+              <input
+                id="rename-text"
+                type="text"
+                bind:value={renameText}
+                placeholder="photo"
+              />
+            </div>
+
+            <div class="rename-options">
+              <label>
+                <input type="radio" bind:group={renameMode} value="sequence" />
+                流水號
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  bind:group={renameMode}
+                  value="date_sequence"
+                />
+                日期＋流水號
+              </label>
+              <p class="rename-preview">
+                {renameText || "photo"}_{renameMode === "date_sequence"
+                  ? "2026-03-22_"
+                  : ""}00001.jpg
+              </p>
             </div>
           {/if}
         </section>
@@ -722,6 +829,9 @@
   .col {
     border-right: 1px solid var(--border);
     padding-right: 1.5rem;
+    min-width: 0; /* 防止撐開 grid */
+    overflow: hidden; /* 加這行 */
+    width: 230px; /* 明確固定寬度 */
   }
 
   section {
@@ -733,12 +843,6 @@
     font-weight: bold;
     margin-bottom: 0.5rem;
     text-align: left;
-  }
-
-  .selected {
-    margin-top: 0.5rem;
-    font-size: 1rem;
-    color: var(--text-muted);
   }
 
   .radio-group {
@@ -924,7 +1028,7 @@
   .dialog-box {
     background: var(--bg-secondary);
     color: var(--text);
-    padding: 1.5rem;
+    padding: 1.2rem;
     border-radius: 8px;
     min-width: 250px;
     text-align: center;
@@ -1076,29 +1180,60 @@
     color: var(--text);
   }
 
-  .file-list {
-    list-style: none;
-    padding: 0;
-    margin: 0.5rem 0 0;
-    max-height: 120px;
-    overflow-y: auto;
-    font-size: 0.9rem;
+  .selected,
+  .file-summary {
+    height: 2rem;
+    display: flex;
+    align-items: center;
+    margin: 0.5rem 0;
+    font-size: 1rem;
+    color: var(--text-muted);
   }
 
-  .file-list li {
+  .file-summary {
+    justify-content: space-between;
+  }
+
+  .view-btn {
+    font-size: 1rem;
+    padding: 0.2 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 4=px;
+    background: var(--bg-secondary);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .file-list-dialog {
+    width: 420px;
+    text-align: left;
+  }
+
+  .file-list-modal {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-height: 270px;
+    overflow-y: auto;
+  }
+
+  .file-list-modal li {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.2rem 0;
+    padding: 0.35rem 0;
     border-bottom: 1px solid var(--border);
+    gap: 0.5rem;
   }
 
-  .file-list li span {
+  .file-list-modal li span {
+    font-size: 0.9rem;
+    color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     flex: 1;
-    color: var(--text-muted);
+    min-width: 0;
   }
 
   .remove-btn {
@@ -1115,14 +1250,26 @@
     color: #e53935;
   }
 
-  .clear-btn {
-    margin-top: 0.4rem;
-    font-size: 0.85rem;
-    padding: 0.2rem 0.6rem;
-    background: var(--btn-secondary-bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    cursor: pointer;
+  .rename-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+
+  .rename-options label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 1rem;
+  }
+
+  .rename-preview {
+    width: 100%; /* 強制換行到下一列 */
+    font-size: 0.9rem;
     color: var(--text-muted);
+    font-family: monospace;
+    margin: 0;
+    padding: 0;
   }
 </style>
