@@ -17,6 +17,7 @@
   let targetUnit = "kb";
   let isProcessing = false;
   let wmBold = false;
+  let isDragging = false;
 
   // 進度
   let progress = { current: 0, total: 0 };
@@ -55,18 +56,52 @@
     if (!e.target.closest(".picker")) showOptions = false;
   }
 
-  onMount(async () => {
-    const store = await load("settings.json");
-    const saved = await store.get("watermark");
-    if (saved) {
-      wmText = saved.text ?? "";
-      wmFontName = saved.fontName ?? "NotoSans";
-      wmPosition = saved.position ?? "bottom-right";
-      wmOpacity = saved.opacity ?? 70;
-      wmColor = saved.color ?? "#ffffff";
-      wmFontSize = saved.fontSize ?? 40;
-      wmBold = saved.bold ?? false;
-    }
+  onMount(() => {
+    load("settings.json").then(async (store) => {
+      const saved = await store.get("watermark");
+      if (saved) {
+        wmText = saved.text ?? "";
+        wmFontName = saved.fontName ?? "NotoSans";
+        wmPosition = saved.position ?? "bottom-right";
+        wmOpacity = saved.opacity ?? 70;
+        wmColor = saved.color ?? "#ffffff";
+        wmFontSize = saved.fontSize ?? 40;
+        wmBold = saved.bold ?? false;
+      }
+    });
+
+    let unlistenDrop = null;
+    let unlistenHover = null;
+    let unlistenLeave = null;
+
+    listen("tauri://drag-drop", ({ payload }) => {
+      const paths = payload.paths ?? [];
+      const newPaths = paths.filter((p) => !selectedFiles.includes(p));
+      if (newPaths.length > 0) {
+        selectedFiles = [...selectedFiles, ...newPaths];
+      }
+      isDragging = false;
+    }).then((fn) => {
+      unlistenDrop = fn;
+    });
+
+    listen("tauri://drag-over", () => {
+      isDragging = true;
+    }).then((fn) => {
+      unlistenHover = fn;
+    });
+
+    listen("tauri://drag-leave", () => {
+      isDragging = false;
+    }).then((fn) => {
+      unlistenLeave = fn;
+    });
+
+    return () => {
+      unlistenDrop?.();
+      unlistenHover?.();
+      unlistenLeave?.();
+    };
   });
 
   async function pickFiles() {
@@ -81,14 +116,22 @@
         },
       ],
     });
-    if (selected)
-      selectedFiles = Array.isArray(selected) ? selected : [selected];
+    if (selected) {
+      const files = Array.isArray(selected) ? selected : [selected];
+      const newFiles = files.filter((f) => !selectedFiles.includes(f));
+      selectedFiles = [...selectedFiles, ...newFiles];
+    }
   }
 
   async function pickFolder() {
     showOptions = false;
     const selected = await open({ multiple: false, directory: true });
-    if (selected) selectedFiles = [selected];
+    if (selected) {
+      // 累加，避免重複
+      if (!selectedFiles.includes(selected)) {
+        selectedFiles = [...selectedFiles, selected];
+      }
+    }
   }
 
   function onShrinkModeChange() {
@@ -309,6 +352,10 @@
     ];
   }
 
+  function removeFile(index) {
+    selectedFiles = selectedFiles.filter((_, i) => i !== index);
+  }
+
   // Reactive
   $: selectedLabel =
     selectedFiles.length === 0
@@ -434,11 +481,34 @@
           {#if showOptions}
             <div class="options">
               <button on:click={pickFiles}>選擇檔案</button>
-              <button on:click={pickFolder}>選擇資料夾</button>
+              <button on:click={pickFolder}>新增資料夾</button>
             </div>
           {/if}
         </div>
-        <p class="selected">已選擇：{selectedLabel}</p>
+
+        <!-- 拖曳區 -->
+        <div class="drop-zone" class:drag-over={isDragging}>
+          {isDragging ? "放開以加入" : "拖曳檔案或資料夾到這裡"}
+        </div>
+
+        <!-- 已選清單 -->
+        {#if selectedFiles.length > 0}
+          <ul class="file-list">
+            {#each selectedFiles as f, i}
+              <li>
+                <span>{f.split("\\").pop().split("/").pop()}</span>
+                <button class="remove-btn" on:click={() => removeFile(i)}
+                  >✕</button
+                >
+              </li>
+            {/each}
+          </ul>
+          <button class="clear-btn" on:click={() => (selectedFiles = [])}
+            >清除全部</button
+          >
+        {:else}
+          <p class="selected">尚未選擇</p>
+        {/if}
       </section>
 
       <section>
@@ -986,5 +1056,73 @@
       color: #000000;
       border-color: #ffffff;
     }
+  }
+
+  .drop-zone {
+    margin-top: 0.5rem;
+    border: 2px dashed var(--border);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    text-align: center;
+    transition: all 0.15s;
+    cursor: default;
+  }
+
+  .drop-zone.drag-over {
+    border-color: var(--border-focus);
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .file-list {
+    list-style: none;
+    padding: 0;
+    margin: 0.5rem 0 0;
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 0.9rem;
+  }
+
+  .file-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.2rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .file-list li span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    color: var(--text-muted);
+  }
+
+  .remove-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.8rem;
+    padding: 0 0.25rem;
+    flex-shrink: 0;
+  }
+
+  .remove-btn:hover {
+    color: #e53935;
+  }
+
+  .clear-btn {
+    margin-top: 0.4rem;
+    font-size: 0.85rem;
+    padding: 0.2rem 0.6rem;
+    background: var(--btn-secondary-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text-muted);
   }
 </style>
