@@ -309,6 +309,16 @@
           inputs: selectedFiles,
           customText: renameText.trim(),
           renameMode,
+          watermark: enableWatermark
+            ? {
+                text: wmText,
+                position: wmPosition,
+                opacity: (100 - wmOpacity) / 100,
+                color: hexToRgb(wmColor),
+                fontSize: wmFontSize,
+                bold: wmBold,
+              }
+            : null,
         });
       } else {
         await invoke("compress_image", {
@@ -342,10 +352,6 @@
     isProcessing = false;
     isDone = false;
     progress = { current: 0, total: 0 };
-  }
-
-  function onWatermarkToggle() {
-    if (enableWatermark) showWatermarkSettings = true;
   }
 
   async function saveWatermarkSettings() {
@@ -397,6 +403,8 @@
 
   $: if (mode === "watermark") {
     enableWatermark = true;
+  } else {
+    enableWatermark = false;
   }
 </script>
 
@@ -576,12 +584,12 @@
             ><input type="radio" bind:group={mode} value="compress" /> 壓縮</label
           >
           <label
-            ><input type="radio" bind:group={mode} value="watermark" /> 浮水印</label
+            ><input type="radio" bind:group={mode} value="rename" /> 批量更名</label
           >
         </div>
         <div class="radio-group">
           <label
-            ><input type="radio" bind:group={mode} value="rename" /> 批量更名</label
+            ><input type="radio" bind:group={mode} value="watermark" /> 浮水印</label
           >
         </div>
       </section>
@@ -593,7 +601,6 @@
             <input
               type="checkbox"
               bind:checked={enableWatermark}
-              on:change={onWatermarkToggle}
               disabled={mode === "watermark"}
             />
             加入浮水印
@@ -831,7 +838,7 @@
     padding-right: 1.5rem;
     min-width: 0; /* 防止撐開 grid */
     overflow: hidden; /* 加這行 */
-    width: 230px; /* 明確固定寬度 */
+    width: 240px; /* 明確固定寬度 */
   }
 
   section {
