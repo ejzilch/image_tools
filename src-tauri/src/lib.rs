@@ -1,4 +1,5 @@
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
+use chrono::Local;
 use fast_image_resize::{self as fir, Resizer};
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -284,9 +285,8 @@ async fn shrink_image(
 
                 let out_dir = ensure_output_dir(img_path, "shrink");
                 let out = output_path_with_dir(&out_dir, img_path);
-                final_img
-                    .save(&out)
-                    .map_err(|e| format!("無法儲存 {:?}: {}", out, e))?;
+
+                save_image(&final_img, &out, &ext)?;
 
                 Ok(out.to_string_lossy().to_string())
             })();
@@ -412,9 +412,8 @@ async fn compress_image(
                             .to_lowercase();
                         let img = decode_image(&bytes, &ext)?;
                         let final_img = apply_watermark(img, wm)?;
-                        final_img
-                            .save(&out)
-                            .map_err(|e| format!("無法儲存: {}", e))?;
+
+                        save_image(&final_img, &out, &ext)?;
                     } else {
                         fs::write(&out, &bytes).map_err(|e| format!("複製失敗: {}", e))?;
                     }
@@ -558,9 +557,8 @@ async fn watermark_only(
 
                 let out_dir = ensure_output_dir(img_path, "watermark");
                 let out = output_path_with_dir(&out_dir, img_path);
-                final_img
-                    .save(&out)
-                    .map_err(|e| format!("無法儲存: {}", e))?;
+
+                save_image(&final_img, &out, &ext)?;
 
                 Ok(out.to_string_lossy().to_string())
             })();
@@ -827,6 +825,140 @@ fn draw_text_bold(
     imageproc::drawing::draw_text_mut(img, color, x, y, scale, font, text);
 }
 
+#[tauri::command]
+async fn rename_images(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ProcessingState>,
+    inputs: Vec<String>,
+    custom_text: String,
+    rename_mode: String,
+    watermark: Option<WatermarkOptions>,
+) -> Result<Vec<String>, String> {
+    state.cancel_flag.store(false, Ordering::Relaxed);
+    state.output_files.lock().unwrap().clear();
+
+    let cancel_flag = state.cancel_flag.clone();
+    let output_files = state.output_files.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let images: Vec<PathBuf> = inputs
+            .iter()
+            .flat_map(|input| collect_images(input))
+            .collect();
+
+        if images.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let total = images.len();
+        app.emit("progress_total", total).ok();
+
+        let counter = std::sync::atomic::AtomicUsize::new(1);
+        let date_str = Local::now().format("%Y-%m-%d").to_string();
+
+        let outputs = Mutex::new(Vec::new());
+        let errors = Mutex::new(Vec::new());
+
+        images.par_iter().for_each(|img_path| {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return;
+            }
+
+            let result = (|| -> Result<String, String> {
+                let num = counter.fetch_add(1, Ordering::Relaxed);
+                if num > 99999 {
+                    return Err("流水號超過上限 99999".to_string());
+                }
+
+                let seq = format!("{:05}", num);
+                let ext = img_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("jpg")
+                    .to_lowercase();
+
+                let new_stem = match rename_mode.as_str() {
+                    "date_sequence" => format!("{}_{}_{}", custom_text, date_str, seq),
+                    _ => format!("{}_{}", custom_text, seq),
+                };
+
+                let new_name = format!("{}.{}", new_stem, ext);
+                let out_dir = ensure_output_dir(img_path, "rename");
+                let out = out_dir.join(&new_name);
+
+                if let Some(ref wm) = watermark {
+                    let bytes = fs::read(img_path).map_err(|e| format!("讀取失敗: {}", e))?;
+                    let img = decode_image(&bytes, &ext)?;
+                    let final_img = apply_watermark(img, wm)?;
+
+                    save_image(&final_img, &out, &ext)?;
+                } else {
+                    // 無浮水印：直接複製，速度最快
+                    fs::copy(img_path, &out).map_err(|e| format!("複製失敗: {}", e))?;
+                }
+
+                Ok(out.to_string_lossy().to_string())
+            })();
+
+            let current = counter.load(Ordering::Relaxed) - 1;
+            let file_name = img_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+
+            match result {
+                Ok(path) => {
+                    app.emit(
+                        "progress",
+                        ProgressPayload {
+                            current,
+                            total,
+                            file: file_name,
+                            success: true,
+                            error: None,
+                        },
+                    )
+                    .ok();
+                    output_files.lock().unwrap().push(PathBuf::from(&path));
+                    outputs.lock().unwrap().push(path);
+                }
+                Err(e) => {
+                    app.emit(
+                        "progress",
+                        ProgressPayload {
+                            current,
+                            total,
+                            file: file_name,
+                            success: false,
+                            error: Some(e.clone()),
+                        },
+                    )
+                    .ok();
+                    errors.lock().unwrap().push(e);
+                }
+            }
+        });
+
+        let errors = errors.into_inner().unwrap();
+        if !errors.is_empty() {
+            return Err(errors.join("\n"));
+        }
+        Ok(outputs.into_inner().unwrap())
+    })
+    .await
+    .map_err(|e| format!("執行緒錯誤: {}", e))?
+}
+
+fn save_image(img: &image::DynamicImage, out: &Path, ext: &str) -> Result<(), String> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let fmt = image::ImageFormat::from_extension(ext).unwrap_or(image::ImageFormat::Jpeg);
+    img.write_to(&mut buf, fmt)
+        .map_err(|e| format!("編碼失敗: {}", e))?;
+    fs::write(out, buf.into_inner()).map_err(|e| format!("無法儲存: {}", e))?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -842,6 +974,7 @@ pub fn run() {
             cancel_processing,
             check_output_dir_exists,
             watermark_only,
+            rename_images,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
