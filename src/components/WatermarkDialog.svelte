@@ -1,16 +1,15 @@
 <script>
-    import { createEventDispatcher } from "svelte";
     import { load } from "@tauri-apps/plugin-store";
 
-    const dispatch = createEventDispatcher();
+    let { onSave, onClose } = $props();
 
-    let wmText = "";
-    let wmFontName = "NotoSans";
-    let wmPosition = "bottom-right";
-    let wmOpacity = 70;
-    let wmColor = "#ffffff";
-    let wmFontSize = 40;
-    let wmBold = false;
+    let wmText = $state("");
+    let wmFontName = $state("NotoSans");
+    let wmPosition = $state("bottom-right");
+    let wmOpacity = $state(70);
+    let wmColor = $state("#ffffff");
+    let wmFontSize = $state(40);
+    let wmBold = $state(false);
 
     // 載入已儲存的設定
     load("settings.json").then(async (store) => {
@@ -39,7 +38,7 @@
         });
         await store.save();
 
-        dispatch("save", {
+        onSave({
             text: wmText,
             fontName: wmFontName,
             position: wmPosition,
@@ -91,7 +90,7 @@
             <button
                 class="bold-btn"
                 class:active={wmBold}
-                on:click={() => (wmBold = !wmBold)}
+                onclick={() => (wmBold = !wmBold)}
             >
                 <b>B</b>
             </button>
@@ -123,11 +122,9 @@
         </div>
 
         <div class="dialog-buttons" style="margin-top: 1rem;">
-            <button class="btn-ok" on:click={save}>儲存</button>
-            <button class="btn-cancel" on:click={reset}>重置</button>
-            <button class="btn-cancel" on:click={() => dispatch("close")}
-                >關閉</button
-            >
+            <button class="btn-ok" onclick={save}>儲存</button>
+            <button class="btn-cancel" onclick={reset}>重置</button>
+            <button class="btn-cancel" onclick={onClose}>關閉</button>
         </div>
     </div>
 </div>

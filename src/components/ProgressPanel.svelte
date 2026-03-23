@@ -7,9 +7,7 @@
         failedFiles,
         progressPct,
     } from "../stores/progress.js";
-    import { createEventDispatcher } from "svelte";
-
-    const dispatch = createEventDispatcher();
+    let { onCancel } = $props();
 </script>
 
 {#if $isProcessing || $isDone}
@@ -26,9 +24,7 @@
                     style="width: {$progressPct}%"
                 ></div>
             </div>
-            <button class="cancel" on:click={() => dispatch("cancel")}
-                >取消</button
-            >
+            <button class="cancel" onclick={onCancel}>取消</button>
         {/if}
 
         {#if $isDone}

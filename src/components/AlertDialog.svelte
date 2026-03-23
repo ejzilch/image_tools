@@ -6,7 +6,7 @@
 <div class="overlay">
     <div class="dialog-box">
         <p>{message}</p>
-        <button class="btn-ok" on:click={onClose}>確定</button>
+        <button class="btn-ok" onclick={onClose}>確定</button>
     </div>
 </div>
 

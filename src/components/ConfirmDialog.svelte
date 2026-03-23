@@ -8,8 +8,8 @@
     <div class="dialog-box">
         <p>{message}</p>
         <div class="dialog-buttons">
-            <button class="btn-ok" on:click={onOk}>確定</button>
-            <button class="btn-cancel" on:click={onCancel}>取消</button>
+            <button class="btn-ok" onclick={onOk}>確定</button>
+            <button class="btn-cancel" onclick={onCancel}>取消</button>
         </div>
     </div>
 </div>
