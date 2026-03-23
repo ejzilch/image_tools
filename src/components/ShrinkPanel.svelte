@@ -20,7 +20,7 @@
                 type="radio"
                 bind:group={$shrinkMode}
                 value="dimension"
-                on:change={onShrinkModeChange}
+                onchange={onShrinkModeChange}
             /> 指定寬高
         </label>
         <label>
@@ -28,7 +28,7 @@
                 type="radio"
                 bind:group={$shrinkMode}
                 value="ratio"
-                on:change={onShrinkModeChange}
+                onchange={onShrinkModeChange}
             /> 維持比例縮小
         </label>
     </div>

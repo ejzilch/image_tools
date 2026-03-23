@@ -3,11 +3,21 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
 
   import AlertDialog from "./components/AlertDialog.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import WatermarkDialog from "./components/WatermarkDialog.svelte";
   import ProgressPanel from "./components/ProgressPanel.svelte";
+  import FileListDialog from "./components/FileListDialog.svelte";
+  import ShrinkPanel from "./components/ShrinkPanel.svelte";
+  import CompressPanel from "./components/CompressPanel.svelte";
+  import RenamePanel from "./components/RenamePanel.svelte";
+
+  import { selectedFiles, addFiles } from "./stores/files.js";
+  import { shrinkMode, width, height, ratio } from "./stores/shrink.js";
+  import { targetSize, targetUnit } from "./stores/compress.js";
+  import { renameText, renameMode } from "./stores/rename.js";
   import {
     isProcessing,
     isDone,
@@ -15,38 +25,23 @@
     successCount,
     failedFiles,
   } from "./stores/progress.js";
-  import FileListDialog from "./components/FileListDialog.svelte";
-  import {
-    selectedFiles,
-    addFiles,
-    removeFile,
-    clearFiles,
-  } from "./stores/files.js";
-  import { get } from "svelte/store";
-
-  import ShrinkPanel from "./components/ShrinkPanel.svelte";
-  import CompressPanel from "./components/CompressPanel.svelte";
-  import RenamePanel from "./components/RenamePanel.svelte";
-
-  import { shrinkMode, width, height, ratio } from "./stores/shrink.js";
-  import { targetSize, targetUnit } from "./stores/compress.js";
-  import { renameText, renameMode } from "./stores/rename.js";
 
   // 狀態
-  let mode = "shrink";
-  let showOptions = false;
-  let isDragging = false;
-  let showFileList = false;
+  let mode = $state("shrink");
+  let showOptions = $state(false);
+  let isDragging = $state(false);
+  let showFileList = $state(false);
 
   // 進度
   let dragListeners = []; // 元件存活期間
   let progressListeners = []; // 只在執行期間
 
   // 浮水印設定
-  let enableWatermark = false;
-  let showWatermarkSettings = false;
+  let manualWatermark = $state(false);
+  let enableWatermark = $derived(mode === "watermark" || manualWatermark);
+  let showWatermarkSettings = $state(false);
 
-  let wmSettings = {
+  let wmSettings = $state({
     text: "",
     fontName: "NotoSans",
     position: "bottom-right",
@@ -54,26 +49,78 @@
     color: "#ffffff",
     fontSize: 40,
     bold: false,
-  };
+  });
 
   // 彈窗
-  let alertMessage = "";
-  let showAlert = false;
-  /** @type {(value?: unknown) => void} */
-  let closeAlert = (_value) => {};
+  let alertMessage = $state("");
+  let showAlert = $state(false);
+  let closeAlert = $state((_value) => {});
+  let confirmMessage = $state("");
+  let showConfirm = $state(false);
+  let resolveConfirm = $state((_value) => {});
 
-  let confirmMessage = "";
-  let showConfirm = false;
-  /** @type {(value?: unknown) => void} */
-  let resolveConfirm = (_value) => {};
+  // 各個 mode 的驗證
+  const validators = {
+    shrink: validateShrink,
+    compress: validateCompress,
+    rename: validateRename,
+    watermark: validateWatermark,
+  };
+
+  // 各個 mode 的 payload
+  /** @type {Record<string, (files: string[]) => { command: string, payload: object }>} */
+  const modeHandlers = {
+    shrink: (files) => ({
+      command: "shrink_image",
+      payload: {
+        inputs: files,
+        shrinkMode: get(shrinkMode),
+        width: Number(get(width)),
+        height: Number(get(height)),
+        ratio: Number(get(ratio)),
+        watermark: enableWatermark ? buildWatermarkPayload() : null,
+      },
+    }),
+
+    watermark: (files) => ({
+      command: "watermark_only",
+      payload: {
+        inputs: files,
+        watermark: buildWatermarkPayload(),
+      },
+    }),
+
+    rename: (files) => ({
+      command: "rename_images",
+      payload: {
+        inputs: files,
+        customText: get(renameText).trim(),
+        renameMode: get(renameMode),
+        watermark: enableWatermark ? buildWatermarkPayload() : null,
+      },
+    }),
+
+    compress: (files) => ({
+      command: "compress_image",
+      payload: {
+        inputs: files,
+        targetBytes:
+          Number(get(targetSize)) *
+          (get(targetUnit) === "kb" ? 1024 : 1024 * 1024),
+        watermark: enableWatermark ? buildWatermarkPayload() : null,
+      },
+    }),
+  };
 
   // 工具函式
   function toggleOptions() {
     showOptions = !showOptions;
   }
 
+  /** @param {MouseEvent} e */
   function handleClickOutside(e) {
-    if (!e.target.closest(".picker")) showOptions = false;
+    if (!(/** @type {HTMLElement} */ (e.target).closest(".picker")))
+      showOptions = false;
   }
 
   onMount(() => {
@@ -204,13 +251,6 @@
     return true;
   }
 
-  const validators = {
-    shrink: validateShrink,
-    compress: validateCompress,
-    rename: validateRename,
-    watermark: validateWatermark,
-  };
-
   async function validate() {
     if (get(selectedFiles).length === 0) {
       await showWarningDialog("請先選擇檔案");
@@ -281,36 +321,11 @@
     const files = get(selectedFiles);
 
     try {
-      if (mode === "shrink") {
-        await invoke("shrink_image", {
-          inputs: files,
-          shrinkMode: get(shrinkMode),
-          width: Number(get(width)),
-          height: Number(get(height)),
-          ratio: Number(get(ratio)),
-          watermark: enableWatermark ? buildWatermarkPayload() : null,
-        });
-      } else if (mode === "watermark") {
-        await invoke("watermark_only", {
-          inputs: files,
-          watermark: buildWatermarkPayload(),
-        });
-      } else if (mode === "rename") {
-        await invoke("rename_images", {
-          inputs: files,
-          customText: get(renameText).trim(),
-          renameMode: get(renameMode),
-          watermark: enableWatermark ? buildWatermarkPayload() : null,
-        });
-      } else {
-        await invoke("compress_image", {
-          inputs: files,
-          targetBytes:
-            Number(get(targetSize)) *
-            (get(targetUnit) === "kb" ? 1024 : 1024 * 1024),
-          watermark: enableWatermark ? buildWatermarkPayload() : null,
-        });
-      }
+      const handler = modeHandlers[mode];
+      if (!handler) throw new Error(`未知模式：${mode}`);
+
+      const { command, payload } = handler(files);
+      await invoke(command, payload);
     } catch (e) {
       failedFiles.update((arr) => [
         ...arr,
@@ -333,12 +348,23 @@
     cleanupProgressListeners();
   }
 
+  /** @param {string} hex */
   function hexToRgb(hex) {
-    return [
-      parseInt(hex.slice(1, 3), 16),
-      parseInt(hex.slice(3, 5), 16),
-      parseInt(hex.slice(5, 7), 16),
-    ];
+    // 處理縮寫色碼，例如 #fff → #ffffff
+    if (hex.length === 4) {
+      hex = `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`;
+    }
+
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+
+    // 任何一個是 NaN 就回傳白色作為預設值
+    if (isNaN(r) || isNaN(g) || isNaN(b)) {
+      return [255, 255, 255];
+    }
+
+    return [r, g, b];
   }
 
   function buildWatermarkPayload() {
@@ -352,10 +378,12 @@
     };
   }
 
+  /** @param {() => void} fn */
   function addDragListener(fn) {
     dragListeners.push(fn);
   }
 
+  /** @param {() => void} fn */
   function addProgressListener(fn) {
     progressListeners.push(fn);
   }
@@ -371,16 +399,9 @@
     progressListeners.forEach((fn) => fn());
     progressListeners = [];
   }
-
-  // Reactive
-  $: if (mode === "watermark") {
-    enableWatermark = true;
-  } else {
-    enableWatermark = false;
-  }
 </script>
 
-<svelte:window on:click={handleClickOutside} />
+<svelte:window onclick={handleClickOutside} />
 
 <main>
   {#if showAlert}
@@ -397,11 +418,11 @@
 
   {#if showWatermarkSettings}
     <WatermarkDialog
-      on:save={(e) => {
-        wmSettings = e.detail;
+      onSave={(data) => {
+        wmSettings = data;
         showWatermarkSettings = false;
       }}
-      on:close={() => (showWatermarkSettings = false)}
+      onClose={() => (showWatermarkSettings = false)}
     />
   {/if}
 
@@ -411,13 +432,19 @@
       <section>
         <p class="label">選擇輸入</p>
         <div class="select-wrapper picker">
-          <button class="select-btn" on:click|stopPropagation={toggleOptions}>
+          <button
+            class="select-btn"
+            onclick={(e) => {
+              e.stopPropagation();
+              toggleOptions();
+            }}
+          >
             選擇輸入
           </button>
           {#if showOptions}
             <div class="options">
-              <button on:click={pickFiles}>選擇檔案</button>
-              <button on:click={pickFolder}>新增資料夾</button>
+              <button onclick={pickFiles}>選擇檔案</button>
+              <button onclick={pickFolder}>新增資料夾</button>
             </div>
           {/if}
         </div>
@@ -428,14 +455,14 @@
         </div>
 
         {#if showFileList}
-          <FileListDialog on:close={() => (showFileList = false)} />
+          <FileListDialog onClose={() => (showFileList = false)} />
         {/if}
 
         <!-- 拖曳區和檔案數量顯示改用 $selectedFiles -->
         {#if $selectedFiles.length > 0}
           <div class="file-summary">
             <span>已選擇 {$selectedFiles.length} 個檔案</span>
-            <button class="view-btn" on:click={() => (showFileList = true)}
+            <button class="view-btn" onclick={() => (showFileList = true)}
               >檢視</button
             >
           </div>
@@ -469,7 +496,7 @@
             <label class="checkbox-label">
               <input
                 type="checkbox"
-                bind:checked={enableWatermark}
+                bind:checked={manualWatermark}
                 disabled={mode === "watermark"}
               />
               加入浮水印
@@ -477,7 +504,7 @@
             {#if enableWatermark}
               <button
                 class="wm-settings-btn"
-                on:click={() => (showWatermarkSettings = true)}
+                onclick={() => (showWatermarkSettings = true)}
               >
                 <svg
                   width="14"
@@ -511,11 +538,11 @@
         <RenamePanel />
       {/if}
 
-      <button class="execute" on:click={execute} disabled={$isProcessing}>
+      <button class="execute" onclick={execute} disabled={$isProcessing}>
         {$isProcessing ? "處理中..." : "執行"}
       </button>
 
-      <ProgressPanel on:cancel={cancel} />
+      <ProgressPanel onCancel={cancel} />
     </div>
   </div>
 </main>

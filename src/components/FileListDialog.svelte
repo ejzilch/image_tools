@@ -1,8 +1,6 @@
 <script>
     import { selectedFiles, removeFile, clearFiles } from "../stores/files.js";
-    import { createEventDispatcher } from "svelte";
-
-    const dispatch = createEventDispatcher();
+    let { onClose } = $props();
 </script>
 
 <div class="overlay">
@@ -13,25 +11,21 @@
                 <li>
                     <span title={f}>{f.split("\\").pop().split("/").pop()}</span
                     >
-                    <button class="remove-btn" on:click={() => removeFile(i)}
+                    <button class="remove-btn" onclick={() => removeFile(i)}
                         >✕</button
                     >
                 </li>
             {/each}
         </ul>
         <div class="dialog-buttons" style="margin-top: 1rem;">
-            <button class="btn-ok" on:click={() => dispatch("close")}
-                >關閉</button
-            >
+            <button class="btn-ok" onclick={onClose}>關閉</button>
             <button
                 class="btn-cancel"
-                on:click={() => {
+                onclick={() => {
                     clearFiles();
-                    dispatch("close");
-                }}
+                    onClose();
+                }}>清除全部</button
             >
-                清除全部
-            </button>
         </div>
     </div>
 </div>
