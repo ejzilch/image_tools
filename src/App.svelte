@@ -25,6 +25,8 @@
     successCount,
     failedFiles,
   } from "./stores/progress.js";
+  import { wmSettings } from "./stores/watermark.js";
+  import { saveWmSettings } from "./stores/watermark.js";
 
   // 狀態
   let mode = $state("shrink");
@@ -40,16 +42,6 @@
   let manualWatermark = $state(false);
   let enableWatermark = $derived(mode === "watermark" || manualWatermark);
   let showWatermarkSettings = $state(false);
-
-  let wmSettings = $state({
-    text: "",
-    fontName: "NotoSans",
-    position: "bottom-right",
-    opacity: 70,
-    color: "#ffffff",
-    fontSize: 40,
-    bold: false,
-  });
 
   // 彈窗
   let alertMessage = $state("");
@@ -244,7 +236,7 @@
   }
 
   async function validateWatermark() {
-    if (!wmSettings.text) {
+    if (!get(wmSettings).text) {
       await showWarningDialog("請輸入浮水印文字");
       return false;
     }
@@ -258,6 +250,7 @@
     }
 
     if (enableWatermark || mode === "watermark") {
+      console.log(enableWatermark);
       if (!(await validateWatermark())) return false;
     }
 
@@ -369,12 +362,12 @@
 
   function buildWatermarkPayload() {
     return {
-      text: wmSettings.text,
-      position: wmSettings.position,
-      opacity: (100 - wmSettings.opacity) / 100,
-      color: hexToRgb(wmSettings.color),
-      fontSize: wmSettings.fontSize,
-      bold: wmSettings.bold,
+      text: get(wmSettings).text,
+      position: get(wmSettings).position,
+      opacity: (100 - get(wmSettings).opacity) / 100,
+      color: hexToRgb(get(wmSettings).color),
+      fontSize: get(wmSettings).fontSize,
+      bold: get(wmSettings).bold,
     };
   }
 
@@ -418,10 +411,7 @@
 
   {#if showWatermarkSettings}
     <WatermarkDialog
-      onSave={(data) => {
-        wmSettings = data;
-        showWatermarkSettings = false;
-      }}
+      onSave={() => (showWatermarkSettings = false)}
       onClose={() => (showWatermarkSettings = false)}
     />
   {/if}

@@ -1,33 +1,18 @@
 <script>
-    import { load } from "@tauri-apps/plugin-store";
+    import { wmSettings, saveWmSettings } from "../stores/watermark.js";
 
     let { onSave, onClose } = $props();
 
-    let wmText = $state("");
-    let wmFontName = $state("NotoSans");
-    let wmPosition = $state("bottom-right");
-    let wmOpacity = $state(70);
-    let wmColor = $state("#ffffff");
-    let wmFontSize = $state(40);
-    let wmBold = $state(false);
-
-    // 載入已儲存的設定
-    load("settings.json").then(async (store) => {
-        const saved = await store.get("watermark");
-        if (saved) {
-            wmText = saved.text ?? "";
-            wmFontName = saved.fontName ?? "NotoSans";
-            wmPosition = saved.position ?? "bottom-right";
-            wmOpacity = saved.opacity ?? 70;
-            wmColor = saved.color ?? "#ffffff";
-            wmFontSize = saved.fontSize ?? 40;
-            wmBold = saved.bold ?? false;
-        }
-    });
+    let wmText = $state($wmSettings.text);
+    let wmFontName = $state($wmSettings.fontName);
+    let wmPosition = $state($wmSettings.position);
+    let wmOpacity = $state($wmSettings.opacity);
+    let wmColor = $state($wmSettings.color);
+    let wmFontSize = $state($wmSettings.fontSize);
+    let wmBold = $state($wmSettings.bold);
 
     async function save() {
-        const store = await load("settings.json");
-        await store.set("watermark", {
+        await saveWmSettings({
             text: wmText,
             fontName: wmFontName,
             position: wmPosition,
@@ -36,17 +21,8 @@
             fontSize: wmFontSize,
             bold: wmBold,
         });
-        await store.save();
 
-        onSave({
-            text: wmText,
-            fontName: wmFontName,
-            position: wmPosition,
-            opacity: wmOpacity,
-            color: wmColor,
-            fontSize: wmFontSize,
-            bold: wmBold,
-        });
+        onSave();
     }
 
     function reset() {
@@ -70,12 +46,13 @@
                 type="text"
                 bind:value={wmText}
                 placeholder="© 2026 Your Name"
+                id="text"
             />
         </div>
 
         <div class="wm-field-row">
             <label for="select-wrapper">字型</label>
-            <div class="select-wrapper">
+            <div class="select-wrapper" id="select-wrapper">
                 <select bind:value={wmFontName}>
                     <option value="NotoSans">Noto Sans</option>
                     <option value="NotoSerif">Noto Serif</option>
@@ -86,7 +63,7 @@
 
         <div class="wm-field-row">
             <label for="color">顏色</label>
-            <input type="color" bind:value={wmColor} />
+            <input type="color" bind:value={wmColor} id="color" />
             <button
                 class="bold-btn"
                 class:active={wmBold}
@@ -98,18 +75,30 @@
 
         <div class="wm-field-row">
             <label for="range">透明度　{wmOpacity}%</label>
-            <input type="range" min="0" max="100" bind:value={wmOpacity} />
+            <input
+                type="range"
+                min="0"
+                max="100"
+                bind:value={wmOpacity}
+                id="range"
+            />
         </div>
 
         <div class="wm-field-row">
             <label for="number">字體大小</label>
-            <input type="number" bind:value={wmFontSize} min="10" max="200" />
+            <input
+                type="number"
+                bind:value={wmFontSize}
+                min="10"
+                max="200"
+                id="number"
+            />
             <span>px</span>
         </div>
 
         <div class="wm-field-row">
             <label for="select-wrapper">位置</label>
-            <div class="select-wrapper">
+            <div class="select-wrapper" id="select-wrapper">
                 <select bind:value={wmPosition}>
                     <option value="top-left">左上</option>
                     <option value="top-right">右上</option>
