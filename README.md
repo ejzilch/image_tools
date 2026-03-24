@@ -31,6 +31,7 @@
 - 平行處理（`rayon`），多核心同時處理
 - 即時進度條顯示
 - 輸出結果自動建立對應資料夾（`原資料夾_shrink` / `原資料夾_compress`）
+- 輸出結果顯示在UI上，可開啟輸出資料夾
 
 ### 支援格式
 `jpg` / `jpeg` / `png` / `gif` / `bmp` / `webp` / `tiff` / `tif`
@@ -117,4 +118,3 @@ image_tools/
 | `imageproc` | 繪圖演算法 |
 | `ab_glyph` | 處理字體 |
 | `chrono` | 日期時間處理函式庫 |
-| `once_cell` | 日期時間處理函式庫 |
