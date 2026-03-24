@@ -24,6 +24,7 @@
     progress,
     successCount,
     failedFiles,
+    outputDirs,
   } from "./stores/progress.js";
   import { wmSettings } from "./stores/watermark.js";
   import { saveWmSettings } from "./stores/watermark.js";
@@ -318,7 +319,8 @@
       if (!handler) throw new Error(`未知模式：${mode}`);
 
       const { command, payload } = handler(files);
-      await invoke(command, payload);
+      const result = await invoke(command, payload);
+      outputDirs.set(result.output_dirs);
     } catch (e) {
       failedFiles.update((arr) => [
         ...arr,
