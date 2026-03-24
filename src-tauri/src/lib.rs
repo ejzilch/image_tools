@@ -192,6 +192,13 @@ fn process_one(
 
 struct BatchResult {
     outputs: Vec<String>,
+    output_dirs: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct CommandResult {
+    outputs: Vec<String>,
+    output_dirs: Vec<String>,
 }
 
 fn run_parallel<F>(
@@ -293,12 +300,29 @@ where
         for path in &success_paths {
             fs::remove_file(path).ok();
         }
-        return BatchResult { outputs: vec![] };
+        return BatchResult {
+            outputs: vec![],
+            output_dirs: vec![],
+        };
     }
+
+    // 從 success_paths 取不重複的輸出資料夾
+    let output_dirs: Vec<String> = {
+        let mut dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for path in &success_paths {
+            if let Some(parent) = path.parent() {
+                dirs.insert(parent.to_string_lossy().to_string());
+            }
+        }
+        dirs.into_iter().collect()
+    };
 
     *output_files.lock().expect("poisoned mutex") = success_paths;
 
-    BatchResult { outputs }
+    BatchResult {
+        outputs,
+        output_dirs,
+    }
 }
 
 #[tauri::command]
@@ -311,17 +335,20 @@ async fn shrink_image(
     height: u32,
     ratio: f32,
     watermark: Option<WatermarkOptions>,
-) -> Result<Vec<String>, String> {
+) -> Result<CommandResult, String> {
     state.cancel_flag.store(false, Ordering::Relaxed);
     state.output_files.lock().expect("poisoned mutex").clear();
 
     let cancel_flag = state.cancel_flag.clone();
     let output_files = state.output_files.clone();
 
-    tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || -> Result<CommandResult, String> {
         let images = collect_images_from_inputs(&inputs);
         if images.is_empty() {
-            return Ok(vec![]);
+            return Ok(CommandResult {
+                outputs: vec![],
+                output_dirs: vec![],
+            });
         }
 
         // 預先建輸出目錄，避免 par_iter 時競爭
@@ -364,7 +391,10 @@ async fn shrink_image(
             },
         );
 
-        Ok(batch.outputs)
+        Ok(CommandResult {
+            outputs: batch.outputs,
+            output_dirs: batch.output_dirs,
+        })
     })
     .await
     .map_err(|e| format!("執行緒錯誤: {}", e))?
@@ -377,17 +407,20 @@ async fn compress_image(
     inputs: Vec<String>,
     target_bytes: u64,
     watermark: Option<WatermarkOptions>,
-) -> Result<Vec<String>, String> {
+) -> Result<CommandResult, String> {
     state.cancel_flag.store(false, Ordering::Relaxed);
     state.output_files.lock().expect("poisoned mutex").clear();
 
     let cancel_flag = state.cancel_flag.clone();
     let output_files = state.output_files.clone();
 
-    tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || -> Result<CommandResult, String> {
         let images = collect_images_from_inputs(&inputs);
         if images.is_empty() {
-            return Ok(vec![]);
+            return Ok(CommandResult {
+                outputs: vec![],
+                output_dirs: vec![],
+            });
         }
 
         let batch = run_parallel(
@@ -411,7 +444,10 @@ async fn compress_image(
             },
         );
 
-        Ok(batch.outputs)
+        Ok(CommandResult {
+            outputs: batch.outputs,
+            output_dirs: batch.output_dirs,
+        })
     })
     .await
     .map_err(|e| format!("執行緒錯誤: {}", e))?
@@ -423,7 +459,7 @@ async fn watermark_only(
     state: tauri::State<'_, ProcessingState>,
     inputs: Vec<String>,
     watermark: WatermarkOptions,
-) -> Result<Vec<String>, String> {
+) -> Result<CommandResult, String> {
     state.cancel_flag.store(false, Ordering::Relaxed);
     state
         .output_files
@@ -434,10 +470,13 @@ async fn watermark_only(
     let cancel_flag = state.cancel_flag.clone();
     let output_files = state.output_files.clone();
 
-    tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || -> Result<CommandResult, String> {
         let images = collect_images_from_inputs(&inputs);
         if images.is_empty() {
-            return Ok(vec![]);
+            return Ok(CommandResult {
+                outputs: vec![],
+                output_dirs: vec![],
+            });
         }
 
         let batch = run_parallel(
@@ -455,7 +494,10 @@ async fn watermark_only(
             },
         );
 
-        Ok(batch.outputs)
+        Ok(CommandResult {
+            outputs: batch.outputs,
+            output_dirs: batch.output_dirs,
+        })
     })
     .await
     .map_err(|e| format!("執行緒錯誤: {}", e))?
@@ -469,7 +511,7 @@ async fn rename_images(
     custom_text: String,
     rename_mode: String,
     watermark: Option<WatermarkOptions>,
-) -> Result<Vec<String>, String> {
+) -> Result<CommandResult, String> {
     state.cancel_flag.store(false, Ordering::Relaxed);
     state
         .output_files
@@ -480,10 +522,13 @@ async fn rename_images(
     let cancel_flag = state.cancel_flag.clone();
     let output_files = state.output_files.clone();
 
-    tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || -> Result<CommandResult, String> {
         let images = collect_images_from_inputs(&inputs);
         if images.is_empty() {
-            return Ok(vec![]);
+            return Ok(CommandResult {
+                outputs: vec![],
+                output_dirs: vec![],
+            });
         }
 
         let date_str = Local::now().format("%Y-%m-%d").to_string();
@@ -516,7 +561,10 @@ async fn rename_images(
             },
         );
 
-        Ok(batch.outputs)
+        Ok(CommandResult {
+            outputs: batch.outputs,
+            output_dirs: batch.output_dirs,
+        })
     })
     .await
     .map_err(|e| format!("執行緒錯誤: {}", e))?
@@ -883,6 +931,29 @@ fn apply_watermark(rgb: image::RgbImage, wm: &WatermarkOptions) -> Result<image:
     Ok(image::DynamicImage::ImageRgba8(rgba).into_rgb8())
 }
 
+#[tauri::command]
+async fn open_folder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("無法開啟: {}", e))?;
+
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("無法開啟: {}", e))?;
+
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("無法開啟: {}", e))?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -899,6 +970,7 @@ pub fn run() {
             check_output_dir_exists,
             watermark_only,
             rename_images,
+            open_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
