@@ -1,20 +1,20 @@
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
 use chrono::Local;
 use fast_image_resize::{self as fir, Resizer};
-use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 
 // Global statics
 static FONT_DATA: &[u8] = include_bytes!("../fonts/NotoSansTC-VariableFont_wght.ttf");
 
-static FONT: Lazy<FontVec> =
-    Lazy::new(|| FontVec::try_from_vec(FONT_DATA.to_vec()).expect("字型載入失敗"));
+static FONT: LazyLock<FontVec> =
+    LazyLock::new(|| FontVec::try_from_vec(FONT_DATA.to_vec()).expect("字型載入失敗"));
 
 static SUPPORTED_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "tiff", "tif"];
 
@@ -65,10 +65,7 @@ struct WatermarkOp {
 
 impl ImageOp for WatermarkOp {
     fn apply(&self, rgb: image::RgbImage) -> Result<image::RgbImage, String> {
-        // watermark 需要 RGBA，所已完成後轉回 RGB 維持原則一致性
-        let dyn_img = image::DynamicImage::ImageRgb8(rgb);
-        let result = apply_watermark(dyn_img, &self.options)?;
-        Ok(result.into_rgb8())
+        apply_watermark(rgb, &self.options)
     }
 }
 
@@ -125,7 +122,7 @@ fn process_image(
 }
 
 fn save_result(
-    rgb: &image::RgbImage,
+    rgb: image::RgbImage,
     raw_bytes: &[u8],
     ext: &str,
     out: &Path,
@@ -133,25 +130,27 @@ fn save_result(
     has_ops: bool,
 ) -> Result<PathBuf, String> {
     if let Some(target) = compress_target {
-        // 原本就夠小且無任何 output 直接複製
-        if (raw_bytes.len() as u64) <= target && !has_ops {
-            fs::write(out, raw_bytes).map_err(|e| format!("複製失敗: {}", e))?;
+        if (raw_bytes.len() as u64) <= target {
+            if has_ops {
+                let encoded = encode_jpeg_mozjpeg(&rgb, 95)?;
+                fs::write(out, encoded).map_err(|e| format!("無法儲存: {}", e))?;
+            } else {
+                fs::write(out, raw_bytes).map_err(|e| format!("複製失敗: {}", e))?;
+            }
             return Ok(out.to_path_buf());
         }
-        let dyn_img = image::DynamicImage::ImageRgb8(rgb.clone());
         if matches!(ext, "jpg" | "jpeg") {
-            let compressed = compress_to_target(&dyn_img, target)?;
+            let compressed = compress_to_target(&rgb, raw_bytes.len() as u64, target)?;
             fs::write(out, compressed).map_err(|e| format!("無法儲存: {}", e))?;
             Ok(out.to_path_buf())
         } else {
             let out_jpg = out.with_extension("jpg");
-            let compressed = compress_to_target(&dyn_img, target)?;
+            let compressed = compress_to_target(&rgb, raw_bytes.len() as u64, target)?;
             fs::write(&out_jpg, compressed).map_err(|e| format!("無法儲存: {}", e))?;
             Ok(out_jpg)
         }
     } else {
-        let dyn_img = image::DynamicImage::ImageRgb8(rgb.clone());
-        write_image(&dyn_img, out, ext)?;
+        write_image(&rgb, out, ext)?;
         Ok(out.to_path_buf())
     }
 }
@@ -175,7 +174,7 @@ fn process_one(
     };
 
     let out_path = save_result(
-        &rgb,
+        rgb,
         &loaded.raw_bytes,
         &loaded.ext,
         &out,
@@ -193,7 +192,6 @@ fn process_one(
 
 struct BatchResult {
     outputs: Vec<String>,
-    errors: Vec<String>,
 }
 
 fn run_parallel<F>(
@@ -220,7 +218,18 @@ where
                 return (idx, img_path.clone(), Err("cancelled".to_string()));
             }
             let opts = make_opts(idx, img_path);
-            let result = process_one(img_path, &opts, &cancel_flag);
+
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                process_one(img_path, &opts, &cancel_flag)
+            }))
+            .unwrap_or_else(|e| {
+                let msg = e
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| e.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "未知錯誤".to_string());
+                Err(format!("內部錯誤: {}", msg))
+            });
 
             let file_name = img_path
                 .file_name()
@@ -268,7 +277,6 @@ where
     // collect 後只負責收集路徑和錯誤
     let mut success_paths: Vec<PathBuf> = Vec::with_capacity(results.len());
     let mut outputs: Vec<String> = Vec::with_capacity(results.len());
-    let mut errors: Vec<String> = Vec::new();
 
     for (_, _, result) in results {
         match result {
@@ -276,10 +284,7 @@ where
                 success_paths.push(path.clone());
                 outputs.push(path.to_string_lossy().to_string());
             }
-            Err(e) if e == "cancelled" => { /* 取消就跳過 */ }
-            Err(e) => {
-                errors.push(e);
-            }
+            Err(_) => { /* 已透過 progress event 處理 */ }
         }
     }
 
@@ -288,15 +293,12 @@ where
         for path in &success_paths {
             fs::remove_file(path).ok();
         }
-        return BatchResult {
-            outputs: vec![],
-            errors: vec![],
-        };
+        return BatchResult { outputs: vec![] };
     }
 
     *output_files.lock().expect("poisoned mutex") = success_paths;
 
-    BatchResult { outputs, errors }
+    BatchResult { outputs }
 }
 
 #[tauri::command]
@@ -362,9 +364,6 @@ async fn shrink_image(
             },
         );
 
-        if !batch.errors.is_empty() {
-            return Err(batch.errors.join("\n"));
-        }
         Ok(batch.outputs)
     })
     .await
@@ -412,9 +411,6 @@ async fn compress_image(
             },
         );
 
-        if !batch.errors.is_empty() {
-            return Err(batch.errors.join("\n"));
-        }
         Ok(batch.outputs)
     })
     .await
@@ -459,9 +455,6 @@ async fn watermark_only(
             },
         );
 
-        if !batch.errors.is_empty() {
-            return Err(batch.errors.join("\n"));
-        }
         Ok(batch.outputs)
     })
     .await
@@ -523,9 +516,6 @@ async fn rename_images(
             },
         );
 
-        if !batch.errors.is_empty() {
-            return Err(batch.errors.join("\n"));
-        }
         Ok(batch.outputs)
     })
     .await
@@ -658,8 +648,7 @@ fn resize_rgb(rgb: &image::RgbImage, dst_w: u32, dst_h: u32) -> Result<image::Rg
     image::RgbImage::from_raw(dst_w, dst_h, dst.into_vec()).ok_or("resize 轉換失敗".to_string())
 }
 
-fn encode_jpeg_mozjpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
-    let rgb = img.to_rgb8();
+fn encode_jpeg_mozjpeg(rgb: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String> {
     let (width, height) = rgb.dimensions();
 
     let mut compress = mozjpeg::Compress::new(mozjpeg::ColorSpace::JCS_RGB);
@@ -683,17 +672,22 @@ fn encode_jpeg_mozjpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>
     Ok(buf)
 }
 
-fn compress_to_target(img: &image::DynamicImage, target_bytes: u64) -> Result<Vec<u8>, String> {
-    let tolerance = (target_bytes / 10).clamp(50 * 1024, 200 * 1024);
+fn compress_to_target(
+    img: &image::RgbImage,
+    raw_bytes_len: u64,
+    target_bytes: u64,
+) -> Result<Vec<u8>, String> {
+    let tolerance = (target_bytes / 10).clamp(100 * 1024, 200 * 1024);
     let mut low: u8 = 1;
     let mut high: u8 = 95;
     let mut best: Vec<u8> = Vec::new();
 
+    let ratio = target_bytes as f32 / raw_bytes_len as f32;
+    let mut mid = (ratio * 95.0).clamp(1.0, 94.0) as u8;
+
     while low <= high {
-        let mid = low + (high - low) / 2;
         let bytes = encode_jpeg_mozjpeg(img, mid)?;
         let size = bytes.len() as u64;
-
         if size.abs_diff(target_bytes) <= tolerance {
             return Ok(bytes);
         }
@@ -702,11 +696,15 @@ fn compress_to_target(img: &image::DynamicImage, target_bytes: u64) -> Result<Ve
             best = bytes;
             low = mid + 1;
         } else {
-            if mid == 0 {
-                break;
-            }
-            high = mid - 1;
+            // 避免 overflow
+            high = mid.saturating_sub(1);
         }
+
+        if low > high {
+            break;
+        }
+
+        mid = low + (high - low) / 2;
     }
 
     if best.is_empty() {
@@ -715,7 +713,7 @@ fn compress_to_target(img: &image::DynamicImage, target_bytes: u64) -> Result<Ve
     Ok(best)
 }
 
-fn write_image(img: &image::DynamicImage, out: &Path, ext: &str) -> Result<(), String> {
+fn write_image(img: &image::RgbImage, out: &Path, ext: &str) -> Result<(), String> {
     let mut buf = std::io::Cursor::new(Vec::new());
     let fmt = image::ImageFormat::from_extension(ext).unwrap_or(image::ImageFormat::Jpeg);
     img.write_to(&mut buf, fmt)
@@ -853,19 +851,16 @@ fn apply_diagonal_watermark(
     }
 }
 
-fn apply_watermark(
-    img: image::DynamicImage,
-    wm: &WatermarkOptions,
-) -> Result<image::DynamicImage, String> {
+fn apply_watermark(rgb: image::RgbImage, wm: &WatermarkOptions) -> Result<image::RgbImage, String> {
     let font = &*FONT;
-    let scale = PxScale::from(wm.font_size * (img.width() as f32 / 1000.0));
+    let scale = PxScale::from(wm.font_size * (rgb.width() as f32 / 1000.0));
     let color = image::Rgba([
         wm.color[0],
         wm.color[1],
         wm.color[2],
         (wm.opacity * 255.0) as u8,
     ]);
-    let mut rgba = img.to_rgba8();
+    let mut rgba = image::DynamicImage::ImageRgb8(rgb).to_rgba8();
 
     match wm.position.as_str() {
         "tiled" => apply_tiled_watermark(&mut rgba, wm, scale, color),
@@ -885,7 +880,7 @@ fn apply_watermark(
         }
     }
 
-    Ok(image::DynamicImage::ImageRgba8(rgba))
+    Ok(image::DynamicImage::ImageRgba8(rgba).into_rgb8())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
