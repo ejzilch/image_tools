@@ -228,14 +228,13 @@
     }
 
     .bold-btn {
-        padding: 0.25rem 0.75rem;
+        font-size: 1rem;
+        padding: 0.2 0.6rem;
         border: 1px solid var(--border);
         border-radius: 4px;
         background: var(--bg-secondary);
         color: var(--text);
         cursor: pointer;
-        font-size: 1rem;
-        transition: all 0.1s;
     }
 
     .bold-btn.active {
