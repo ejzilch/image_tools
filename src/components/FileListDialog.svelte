@@ -1,6 +1,12 @@
 <script>
     import { selectedFiles, removeFile, clearFiles } from "../stores/files.js";
     let { onClose } = $props();
+
+    function shortenPath(path) {
+        const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+        if (parts.length <= 2) return path;
+        return "📁 ..\\" + parts.slice(-2).join("\\");
+    }
 </script>
 
 <div class="overlay">
@@ -9,8 +15,7 @@
         <ul class="file-list-modal">
             {#each $selectedFiles as f, i}
                 <li>
-                    <span title={f}>{f.split("\\").pop().split("/").pop()}</span
-                    >
+                    <span title={f}>{shortenPath(f)}</span>
                     <button class="remove-btn" onclick={() => removeFile(i)}
                         >✕</button
                     >

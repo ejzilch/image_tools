@@ -321,7 +321,8 @@
     );
 
     const files = get(selectedFiles);
-
+    console.log(selectedFiles);
+    console.log(files);
     try {
       const handler = modeHandlers[mode];
       if (!handler) throw new Error(`未知模式：${mode}`);
