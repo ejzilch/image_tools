@@ -3,7 +3,7 @@ import { load } from "@tauri-apps/plugin-store";
 
 export const wmSettings = writable({
     text: "",
-    fontName: "NotoSans",
+    fontName: "notosanstc",
     position: "bottom-right",
     opacity: 70,
     color: "#ffffff",

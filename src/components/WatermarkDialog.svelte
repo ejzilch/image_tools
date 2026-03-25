@@ -27,7 +27,7 @@
 
     function reset() {
         wmText = "";
-        wmFontName = "NotoSans";
+        wmFontName = "notosanstc";
         wmPosition = "bottom-right";
         wmOpacity = 70;
         wmColor = "#ffffff";
@@ -54,9 +54,9 @@
             <label for="select-wrapper">字型</label>
             <div class="select-wrapper" id="select-wrapper">
                 <select bind:value={wmFontName}>
-                    <option value="NotoSans">Noto Sans</option>
-                    <option value="NotoSerif">Noto Serif</option>
-                    <option value="RobotoMono">Roboto Mono</option>
+                    <option value="notosanstc">Noto Sans TC</option>
+                    <option value="chenyuluoyan">辰宇落雁體</option>
+                    <option value="dancingscript">Dancing Script</option>
                 </select>
             </div>
         </div>
