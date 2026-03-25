@@ -1,20 +1,18 @@
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
 use chrono::Local;
+use dashmap::DashMap;
 use fast_image_resize::{self as fir, Resizer};
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 
 // Global statics
-static FONT_DATA: &[u8] = include_bytes!("../fonts/NotoSansTC-VariableFont_wght.ttf");
-
-static FONT: LazyLock<FontVec> =
-    LazyLock::new(|| FontVec::try_from_vec(FONT_DATA.to_vec()).expect("字型載入失敗"));
+static FONT_CACHE: OnceLock<DashMap<String, FontVec>> = OnceLock::new();
 
 static SUPPORTED_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "tiff", "tif"];
 
@@ -37,11 +35,12 @@ struct ProgressPayload {
 #[serde(rename_all = "camelCase")]
 pub struct WatermarkOptions {
     pub text: String,
-    pub position: String,
+    pub font_name: String,
     pub opacity: f32,
     pub color: [u8; 3],
-    pub font_size: f32,
     pub bold: bool,
+    pub position: String,
+    pub font_size: f32,
 }
 
 trait ImageOp: Send + Sync {
@@ -91,6 +90,28 @@ struct LoadedImage {
     // 供「不需要重壓縮」路徑直接複製（避免重新 encode）
     raw_bytes: Vec<u8>,
     ext: String,
+}
+
+fn font_cache() -> &'static DashMap<String, FontVec> {
+    FONT_CACHE.get_or_init(DashMap::new)
+}
+
+fn get_font(name: &str) -> Result<dashmap::mapref::one::Ref<'static, String, FontVec>, String> {
+    let cache = font_cache();
+
+    if !cache.contains_key(name) {
+        let data: &[u8] = match name {
+            "notosanstc" => include_bytes!("../fonts/NotoSansTC-VariableFont_wght.ttf"),
+            "chenyuluoyan" => include_bytes!("../fonts/ChenYuluoyan-2.0-Thin.ttf"),
+            "dancingscript" => include_bytes!("../fonts/DancingScript-VariableFont_wght.ttf"),
+            _ => return Err(format!("未知字型: {}", name)),
+        };
+        let font =
+            FontVec::try_from_vec(data.to_vec()).map_err(|_| format!("字型載入失敗: {}", name))?;
+        cache.insert(name.to_string(), font);
+    }
+
+    cache.get(name).ok_or_else(|| "字型取得失敗".to_string())
 }
 
 fn load_image(img_path: &Path) -> Result<LoadedImage, String> {
@@ -770,8 +791,7 @@ fn write_image(img: &image::RgbImage, out: &Path, ext: &str) -> Result<(), Strin
     Ok(())
 }
 
-fn measure_text_width(text: &str, scale: PxScale) -> u32 {
-    let font = &*FONT;
+fn measure_text_width(font: &FontVec, text: &str, scale: PxScale) -> u32 {
     let scaled = font.as_scaled(scale);
     text.chars()
         .map(|c| scaled.h_advance(font.glyph_id(c)))
@@ -798,6 +818,7 @@ fn calc_watermark_position(
 }
 
 fn draw_text_on(
+    font: &FontVec,
     img: &mut image::RgbaImage,
     color: image::Rgba<u8>,
     x: i32,
@@ -806,7 +827,6 @@ fn draw_text_on(
     text: &str,
     bold: bool,
 ) {
-    let font = &*FONT;
     if bold {
         for dx in -1i32..=1 {
             for dy in -1i32..=1 {
@@ -821,13 +841,13 @@ fn draw_text_on(
 }
 
 fn apply_tiled_watermark(
+    font: &FontVec,
     img: &mut image::RgbaImage,
     wm: &WatermarkOptions,
     scale: PxScale,
     color: image::Rgba<u8>,
 ) {
-    let font = &*FONT;
-    let text_w = measure_text_width(&wm.text, scale);
+    let text_w = measure_text_width(font, &wm.text, scale);
     let text_h = {
         let s = font.as_scaled(scale);
         (s.ascent() - s.descent()).ceil() as u32
@@ -843,7 +863,7 @@ fn apply_tiled_watermark(
         let x_off = if row % 2 == 0 { 0 } else { offset as i32 };
         let mut x = -(text_w as i32) + x_off;
         while x < img_w as i32 + text_w as i32 {
-            draw_text_on(img, color, x, y, scale, &wm.text, wm.bold);
+            draw_text_on(font, img, color, x, y, scale, &wm.text, wm.bold);
             x += spacing_x as i32;
         }
         y += spacing_y as i32;
@@ -852,14 +872,14 @@ fn apply_tiled_watermark(
 }
 
 fn apply_diagonal_watermark(
+    font: &FontVec,
     img: &mut image::RgbaImage,
     wm: &WatermarkOptions,
     scale: PxScale,
     color: image::Rgba<u8>,
 ) {
-    let font = &*FONT;
     let (img_w, img_h) = (img.width(), img.height());
-    let text_w = measure_text_width(&wm.text, scale);
+    let text_w = measure_text_width(font, &wm.text, scale);
     let text_h = {
         let s = font.as_scaled(scale);
         (s.ascent() - s.descent()).ceil() as u32
@@ -871,7 +891,16 @@ fn apply_diagonal_watermark(
     let mut text_layer = image::RgbaImage::new(canvas_sz, canvas_sz);
     let tx = (canvas_sz / 2).saturating_sub(text_w / 2) as i32;
     let ty = (canvas_sz / 2).saturating_sub(text_h / 2) as i32;
-    draw_text_on(&mut text_layer, color, tx, ty, scale, &wm.text, wm.bold);
+    draw_text_on(
+        font,
+        &mut text_layer,
+        color,
+        tx,
+        ty,
+        scale,
+        &wm.text,
+        wm.bold,
+    );
 
     let rotated = imageproc::geometric_transformations::rotate_about_center(
         &text_layer,
@@ -900,7 +929,15 @@ fn apply_diagonal_watermark(
 }
 
 fn apply_watermark(rgb: image::RgbImage, wm: &WatermarkOptions) -> Result<image::RgbImage, String> {
-    let font = &*FONT;
+    let font_name = if wm.font_name.is_empty() {
+        "notosanstc"
+    } else {
+        wm.font_name.as_str()
+    };
+
+    let font = get_font(font_name)?; // 只取一次，往下傳
+    let font = &*font;
+
     let scale = PxScale::from(wm.font_size * (rgb.width() as f32 / 1000.0));
     let color = image::Rgba([
         wm.color[0],
@@ -911,10 +948,10 @@ fn apply_watermark(rgb: image::RgbImage, wm: &WatermarkOptions) -> Result<image:
     let mut rgba = image::DynamicImage::ImageRgb8(rgb).to_rgba8();
 
     match wm.position.as_str() {
-        "tiled" => apply_tiled_watermark(&mut rgba, wm, scale, color),
-        "diagonal" => apply_diagonal_watermark(&mut rgba, wm, scale, color),
+        "tiled" => apply_tiled_watermark(font, &mut rgba, wm, scale, color),
+        "diagonal" => apply_diagonal_watermark(font, &mut rgba, wm, scale, color),
         pos => {
-            let text_w = measure_text_width(&wm.text, scale);
+            let text_w = measure_text_width(font, &wm.text, scale);
             let text_h = {
                 let s = font.as_scaled(scale);
                 (s.ascent() - s.descent()).ceil() as u32
@@ -923,7 +960,7 @@ fn apply_watermark(rgb: image::RgbImage, wm: &WatermarkOptions) -> Result<image:
             let (x, y) =
                 calc_watermark_position(pos, rgba.width(), rgba.height(), text_w, text_h, margin);
             draw_text_on(
-                &mut rgba, color, x as i32, y as i32, scale, &wm.text, wm.bold,
+                font, &mut rgba, color, x as i32, y as i32, scale, &wm.text, wm.bold,
             );
         }
     }

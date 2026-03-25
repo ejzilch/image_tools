@@ -27,7 +27,6 @@
     outputDirs,
   } from "./stores/progress.js";
   import { wmSettings } from "./stores/watermark.js";
-  import { saveWmSettings } from "./stores/watermark.js";
 
   // 狀態
   let mode = $state("shrink");
@@ -43,6 +42,16 @@
   let manualWatermark = $state(false);
   let enableWatermark = $derived(mode === "watermark" || manualWatermark);
   let showWatermarkSettings = $state(false);
+
+  $effect(() => {
+    if (mode === "watermark") {
+      // 當切換到 浮水印 模式時，強制勾選
+      manualWatermark = true;
+    } else {
+      // 當切換到 縮圖、壓縮、更名時，取消勾選
+      manualWatermark = false;
+    }
+  });
 
   // 彈窗
   let alertMessage = $state("");
@@ -251,7 +260,6 @@
     }
 
     if (enableWatermark || mode === "watermark") {
-      console.log(enableWatermark);
       if (!(await validateWatermark())) return false;
     }
 
@@ -330,6 +338,17 @@
       isProcessing.set(false);
       isDone.set(true);
       cleanupProgressListeners();
+
+      // 如果失敗，保留失敗的檔案在清單
+      const failures = get(failedFiles);
+      if (failures.length > 0) {
+        const failedPaths = failures.map((f) => f.file);
+        selectedFiles.update((currentFiles) =>
+          currentFiles.filter((path) => failedPaths.includes(path)),
+        );
+      } else {
+        selectedFiles.set([]);
+      }
     }
   }
 
@@ -365,6 +384,7 @@
   function buildWatermarkPayload() {
     return {
       text: get(wmSettings).text,
+      fontName: get(wmSettings).fontName,
       position: get(wmSettings).position,
       opacity: (100 - get(wmSettings).opacity) / 100,
       color: hexToRgb(get(wmSettings).color),
