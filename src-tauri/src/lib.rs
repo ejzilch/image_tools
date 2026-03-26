@@ -101,9 +101,11 @@ fn get_font(name: &str) -> Result<dashmap::mapref::one::Ref<'static, String, Fon
 
     if !cache.contains_key(name) {
         let data: &[u8] = match name {
-            "notosanstc" => include_bytes!("../fonts/NotoSansTC-VariableFont_wght.ttf"),
-            "chenyuluoyan" => include_bytes!("../fonts/ChenYuluoyan-2.0-Thin.ttf"),
-            "dancingscript" => include_bytes!("../fonts/DancingScript-VariableFont_wght.ttf"),
+            "notosanstc" => include_bytes!("../../public/fonts/NotoSansTC-VariableFont_wght.ttf"),
+            "chenyuluoyan" => include_bytes!("../../public/fonts/ChenYuluoyan-2.0-Thin.ttf"),
+            "dancingscript" => {
+                include_bytes!("../../public/fonts/DancingScript-VariableFont_wght.ttf")
+            }
             _ => return Err(format!("未知字型: {}", name)),
         };
         let font =

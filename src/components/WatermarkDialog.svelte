@@ -523,20 +523,19 @@
 
     @font-face {
         font-family: "NotoSansTC";
-        src: url("../src-tauri/fonts/NotoSansTC-VariableFont_wght.ttf")
-            format("truetype");
+        src: url("/fonts/NotoSansTC-VariableFont_wght.ttf") format("truetype");
     }
 
     @font-face {
         font-family: "ChenYuLuoyan";
-        src: url("../src-tauri/fonts/Chenyuluoyan-Thin.ttf") format("truetype");
+        src: url("/fonts/Chenyuluoyan-Thin.ttf") format("truetype");
         font-weight: normal;
         font-style: normal;
     }
 
     @font-face {
         font-family: "dancingscript";
-        src: url("../src-tauri/fonts/DancingScript-VariableFont_wght.ttf")
+        src: url("/fonts/DancingScript-VariableFont_wght.ttf")
             format("truetype");
     }
 </style>
