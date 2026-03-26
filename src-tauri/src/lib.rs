@@ -848,26 +848,37 @@ fn apply_tiled_watermark(
     color: image::Rgba<u8>,
 ) {
     let text_w = measure_text_width(font, &wm.text, scale);
+
+    // 計算文字實際高度
     let text_h = {
         let s = font.as_scaled(scale);
-        (s.ascent() - s.descent()).ceil() as u32
+        (s.ascent() - s.descent()).ceil() as f32
     };
-    let (img_w, img_h) = (img.width(), img.height());
-    let spacing_y = (img_h / 5).max(text_h * 3);
-    let spacing_x = text_w * 3;
-    let offset = spacing_x / 2;
 
-    let mut row = 0i32;
-    let mut y = 0i32;
-    while y < img_h as i32 + text_h as i32 {
-        let x_off = if row % 2 == 0 { 0 } else { offset as i32 };
-        let mut x = -(text_w as i32) + x_off;
-        while x < img_w as i32 + text_w as i32 {
+    let (img_w, img_h) = (img.width(), img.height());
+    let row_count = 5i32;
+
+    // 計算每一排之間的間距：(總高度 - 文字高度) / (排數 - 1)
+    // row 0 會在 0，最後一 row 會在 img_h - text_h
+    let spacing_y = if row_count > 1 {
+        (img_h as f32 - text_h) / (row_count as f32 - 1.0)
+    } else {
+        0.0
+    };
+
+    // 水平間距維持原本邏輯，確保左右鋪滿
+    let spacing_x = text_w as f32 * 3.0;
+    let offset = spacing_x / 2.0;
+
+    for row in 0..row_count {
+        let y = (row as f32 * spacing_y) as i32;
+        let x_off = if row % 2 == 0 { 0.0 } else { offset };
+        let mut x = -(spacing_x as i32) + (x_off as i32);
+
+        while x < img_w as i32 {
             draw_text_on(font, img, color, x, y, scale, &wm.text, wm.bold);
             x += spacing_x as i32;
         }
-        y += spacing_y as i32;
-        row += 1;
     }
 }
 
