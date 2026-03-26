@@ -136,26 +136,29 @@
     function drawTiled(ctx, textW, scale, color) {
         const imgW = PREVIEW_W;
         const imgH = PREVIEW_H;
+        const textH = scale * 0.8; // 估算文字高度
 
-        // 間距建議：垂直間距與字體大小
-        const spacingY = scale * 4;
-        const spacingX = textW + scale * 3;
+        // 1. 想要有 5 排字，所以間隔有 4 個
+        // 計算總可用高度：從 0 到 (imgH - textH)
+        const rowCount = 5;
+        const spacingY = (imgH - textH) / (rowCount - 1);
+
+        const spacingX = textW * 3;
         const offset = spacingX / 2;
 
         ctx.textBaseline = "top";
 
-        let row = 0;
-        // 起始點設為 -spacingY：確保第一排字是從「畫面外」排進來，頂部不會空掉
-        // 結束點設為 imgH：因為基準線是 top，只要 y 沒超過 imgH，底部就會有字
-        for (let y = -spacingY; y < imgH; y += spacingY) {
-            // 每隔一行錯位，增加美感
+        // 2. 這裡我們直接用 row index 來跑，確保精確控制排數
+        for (let row = 0; row < rowCount; row++) {
+            const y = row * spacingY;
             const xOff = row % 2 === 0 ? 0 : offset;
 
-            // 水平方向也從負間距開始，確保左右邊緣鋪滿
-            for (let x = -spacingX + xOff; x < imgW; x += spacingX) {
+            // 水平方向維持原本的溢出繪製邏輯
+            let x = -spacingX + xOff;
+            while (x < imgW + spacingX) {
                 drawText(ctx, wmText, x, y, color, wmBold);
+                x += spacingX;
             }
-            row++;
         }
     }
 
@@ -276,7 +279,8 @@
                 </div>
 
                 <div class="wm-field-row">
-                    <label for="range">透明度　{wmOpacity}%</label>
+                    <label for="range">透明度 </label>
+                    <span class="val">{wmOpacity}%</span>
                     <input
                         type="range"
                         min="0"
@@ -417,6 +421,13 @@
 
     .wm-field-row input[type="range"] {
         flex: 1;
+    }
+
+    .wm-field-row .val {
+        flex: 0 0 50px;
+        text-align: left;
+        font-size: 0.9rem;
+        font-variant-numeric: tabular-nums;
     }
 
     .wm-field-row input[type="text"] {
