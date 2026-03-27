@@ -14,7 +14,7 @@ use tauri::Emitter;
 // Global statics
 static FONT_CACHE: OnceLock<DashMap<String, FontVec>> = OnceLock::new();
 
-static SUPPORTED_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "tiff", "tif"];
+static SUPPORTED_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "tiff", "tif", "heic", "heif"];
 
 // Public types
 pub struct ProcessingState {
@@ -41,6 +41,24 @@ pub struct WatermarkOptions {
     pub bold: bool,
     pub position: String,
     pub font_size: f32,
+}
+
+#[derive(serde::Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum OutputFormat {
+    Original,
+    Jpeg,
+    Webp,
+}
+
+impl OutputFormat {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "jpeg" | "jpg" => OutputFormat::Jpeg,
+            "webp" => OutputFormat::Webp,
+            _ => OutputFormat::Original,
+        }
+    }
 }
 
 trait ImageOp: Send + Sync {
@@ -73,6 +91,7 @@ struct ProcessOptions {
     compress_target: Option<u64>,
     rename_stem: Option<String>,
     out_suffix: String,
+    output_format: OutputFormat,
 }
 
 // cancel checkpoint helper
@@ -123,7 +142,12 @@ fn load_image(img_path: &Path) -> Result<LoadedImage, String> {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
-    let rgb = decode_to_rgb(&raw_bytes, &ext)?;
+
+    let rgb = match ext.as_str() {
+        "heic" | "heif" => decode_heic(img_path)?,
+        _ => decode_to_rgb(&raw_bytes, &ext)?,
+    };
+
     Ok(LoadedImage {
         rgb,
         raw_bytes,
@@ -151,31 +175,68 @@ fn save_result(
     out: &Path,
     compress_target: Option<u64>,
     has_ops: bool,
+    output_format: &OutputFormat,
 ) -> Result<PathBuf, String> {
-    if let Some(target) = compress_target {
-        if (raw_bytes.len() as u64) <= target {
-            if has_ops {
-                let encoded = encode_jpeg_mozjpeg(&rgb, 95)?;
-                fs::write(out, encoded).map_err(|e| format!("無法儲存: {}", e))?;
+    // 決定實際輸出副檔名
+    let out_ext = match output_format {
+        OutputFormat::Jpeg => "jpg",
+        OutputFormat::Webp => "webp",
+        OutputFormat::Original => {
+            // HEIC 原格式無法輸出，fallback 到 jpg
+            if matches!(ext, "heic" | "heif") {
+                "jpg"
             } else {
-                fs::write(out, raw_bytes).map_err(|e| format!("複製失敗: {}", e))?;
+                ext
             }
-            return Ok(out.to_path_buf());
         }
-        if matches!(ext, "jpg" | "jpeg") {
-            let compressed = compress_to_target(&rgb, raw_bytes.len() as u64, target)?;
-            fs::write(out, compressed).map_err(|e| format!("無法儲存: {}", e))?;
-            Ok(out.to_path_buf())
-        } else {
-            let out_jpg = out.with_extension("jpg");
-            let compressed = compress_to_target(&rgb, raw_bytes.len() as u64, target)?;
-            fs::write(&out_jpg, compressed).map_err(|e| format!("無法儲存: {}", e))?;
-            Ok(out_jpg)
-        }
+    };
+
+    // 如果副檔名需要變更，重建輸出路徑
+    let out = if out.extension().and_then(|e| e.to_str()).unwrap_or("") != out_ext {
+        out.with_extension(out_ext)
     } else {
-        write_image(&rgb, out, ext)?;
-        Ok(out.to_path_buf())
+        out.to_path_buf()
+    };
+
+    if let Some(target) = compress_target {
+        let current_size = raw_bytes.len() as u64;
+
+        // 若原始已經小於目標且不需要 ops 和格式轉換
+        if current_size <= target && !has_ops && matches!(output_format, OutputFormat::Original) {
+            fs::write(&out, raw_bytes).map_err(|e| format!("複製失敗: {}", e))?;
+            return Ok(out);
+        }
+
+        let compressed = compress_to_target(&rgb, current_size, target, out_ext)?;
+
+        fs::write(&out, compressed).map_err(|e| format!("無法儲存: {}", e))?;
+        return Ok(out);
     }
+
+    // 無壓縮目標
+    match out_ext {
+        "webp" => {
+            let encoded = encode_webp(&rgb, 90)?;
+            fs::write(&out, encoded).map_err(|e| format!("無法儲存: {}", e))?;
+        }
+        "jpg" | "jpeg" => {
+            if has_ops || !matches!(output_format, OutputFormat::Original) {
+                let encoded = encode_jpeg_mozjpeg(&rgb, 92)?;
+                fs::write(&out, encoded).map_err(|e| format!("無法儲存: {}", e))?;
+            } else {
+                fs::write(&out, raw_bytes).map_err(|e| format!("複製失敗: {}", e))?;
+            }
+        }
+        _ => {
+            if has_ops {
+                write_image(&rgb, &out, out_ext)?;
+            } else {
+                fs::write(&out, raw_bytes).map_err(|e| format!("複製失敗: {}", e))?;
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 fn process_one(
@@ -203,6 +264,7 @@ fn process_one(
         &out,
         opts.compress_target,
         has_ops,
+        &opts.output_format,
     )?;
 
     if cancel_flag.load(Ordering::Relaxed) {
@@ -358,12 +420,14 @@ async fn shrink_image(
     height: u32,
     ratio: f32,
     watermark: Option<WatermarkOptions>,
+    output_format: String,
 ) -> Result<CommandResult, String> {
     state.cancel_flag.store(false, Ordering::Relaxed);
     state.output_files.lock().expect("poisoned mutex").clear();
 
     let cancel_flag = state.cancel_flag.clone();
     let output_files = state.output_files.clone();
+    let fmt = OutputFormat::from_str(&output_format);
 
     tokio::task::spawn_blocking(move || -> Result<CommandResult, String> {
         let images = collect_images_from_inputs(&inputs);
@@ -410,6 +474,7 @@ async fn shrink_image(
                     compress_target: None,
                     rename_stem: None,
                     out_suffix: "shrink".to_string(),
+                    output_format: fmt.clone(),
                 }
             },
         );
@@ -430,12 +495,14 @@ async fn compress_image(
     inputs: Vec<String>,
     target_bytes: u64,
     watermark: Option<WatermarkOptions>,
+    output_format: String,
 ) -> Result<CommandResult, String> {
     state.cancel_flag.store(false, Ordering::Relaxed);
     state.output_files.lock().expect("poisoned mutex").clear();
 
     let cancel_flag = state.cancel_flag.clone();
     let output_files = state.output_files.clone();
+    let fmt = OutputFormat::from_str(&output_format);
 
     tokio::task::spawn_blocking(move || -> Result<CommandResult, String> {
         let images = collect_images_from_inputs(&inputs);
@@ -463,6 +530,7 @@ async fn compress_image(
                     compress_target: Some(target_bytes),
                     rename_stem: None,
                     out_suffix: "compress".to_string(),
+                    output_format: fmt.clone(),
                 }
             },
         );
@@ -482,6 +550,7 @@ async fn watermark_only(
     state: tauri::State<'_, ProcessingState>,
     inputs: Vec<String>,
     watermark: WatermarkOptions,
+    output_format: String,
 ) -> Result<CommandResult, String> {
     state.cancel_flag.store(false, Ordering::Relaxed);
     state
@@ -492,6 +561,7 @@ async fn watermark_only(
 
     let cancel_flag = state.cancel_flag.clone();
     let output_files = state.output_files.clone();
+    let fmt = OutputFormat::from_str(&output_format);
 
     tokio::task::spawn_blocking(move || -> Result<CommandResult, String> {
         let images = collect_images_from_inputs(&inputs);
@@ -514,6 +584,7 @@ async fn watermark_only(
                 compress_target: None,
                 rename_stem: None,
                 out_suffix: "watermark".to_string(),
+                output_format: fmt.clone(),
             },
         );
 
@@ -534,6 +605,7 @@ async fn rename_images(
     custom_text: String,
     rename_mode: String,
     watermark: Option<WatermarkOptions>,
+    output_format: String,
 ) -> Result<CommandResult, String> {
     state.cancel_flag.store(false, Ordering::Relaxed);
     state
@@ -544,6 +616,7 @@ async fn rename_images(
 
     let cancel_flag = state.cancel_flag.clone();
     let output_files = state.output_files.clone();
+    let fmt = OutputFormat::from_str(&output_format);
 
     tokio::task::spawn_blocking(move || -> Result<CommandResult, String> {
         let images = collect_images_from_inputs(&inputs);
@@ -580,6 +653,7 @@ async fn rename_images(
                     compress_target: None,
                     rename_stem: Some(stem),
                     out_suffix: "rename".to_string(),
+                    output_format: fmt.clone(),
                 }
             },
         );
@@ -696,6 +770,63 @@ fn decode_jpeg_mozjpeg_rgb(bytes: &[u8]) -> Result<image::RgbImage, String> {
     image::RgbImage::from_raw(width, height, pixels).ok_or("建立圖片失敗".to_string())
 }
 
+fn decode_heic(img_path: &Path) -> Result<image::RgbImage, String> {
+    // 先寫到 temp jpg，再讀回來
+    let tmp = std::env::temp_dir().join(format!(
+        "heic_tmp_{}.jpg",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    ));
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("sips")
+            .args([
+                "-s",
+                "format",
+                "jpeg",
+                img_path.to_str().unwrap_or(""),
+                "--out",
+                tmp.to_str().unwrap_or(""),
+            ])
+            .status()
+            .map_err(|e| format!("sips 執行失敗: {}", e))?;
+
+        if !status.success() {
+            return Err("sips 轉換 HEIC 失敗".to_string());
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // 嘗試呼叫 magick
+        let status = std::process::Command::new("magick")
+            .args([img_path.to_str().unwrap_or(""), tmp.to_str().unwrap_or("")])
+            .status();
+
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(_) => return Err("ImageMagick 轉換 HEIC 失敗".to_string()),
+            Err(_) => {
+                return Err(
+                    "無法開啟 HEIC：請先安裝 ImageMagick（https://imagemagick.org）".to_string(),
+                )
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return Err("Linux 不支援 HEIC 輸入".to_string());
+    }
+
+    let bytes = fs::read(&tmp).map_err(|e| format!("讀取暫存檔失敗: {}", e))?;
+    fs::remove_file(&tmp).ok();
+    decode_jpeg_mozjpeg_rgb(&bytes)
+}
+
 fn resize_rgb(rgb: &image::RgbImage, dst_w: u32, dst_h: u32) -> Result<image::RgbImage, String> {
     let src = fir::images::Image::from_vec_u8(
         rgb.width(),
@@ -719,45 +850,27 @@ fn resize_rgb(rgb: &image::RgbImage, dst_w: u32, dst_h: u32) -> Result<image::Rg
     image::RgbImage::from_raw(dst_w, dst_h, dst.into_vec()).ok_or("resize 轉換失敗".to_string())
 }
 
-fn encode_jpeg_mozjpeg(rgb: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String> {
-    let (width, height) = rgb.dimensions();
-
-    let mut compress = mozjpeg::Compress::new(mozjpeg::ColorSpace::JCS_RGB);
-    compress.set_size(width as usize, height as usize);
-    compress.set_quality(quality as f32);
-
-    let mut buf = Vec::new();
-    let mut compress = compress
-        .start_compress(&mut buf)
-        .map_err(|e| format!("mozjpeg 初始化失敗: {}", e))?;
-
-    for row in rgb.as_raw().chunks(width as usize * 3) {
-        compress
-            .write_scanlines(row)
-            .map_err(|e| format!("mozjpeg 寫入失敗: {}", e))?;
-    }
-
-    compress
-        .finish()
-        .map_err(|e| format!("mozjpeg 完成失敗: {}", e))?;
-    Ok(buf)
-}
-
 fn compress_to_target(
     img: &image::RgbImage,
     raw_bytes_len: u64,
     target_bytes: u64,
+    out_ext: &str,
 ) -> Result<Vec<u8>, String> {
     let tolerance = (target_bytes / 10).clamp(100 * 1024, 200 * 1024);
     let mut low: u8 = 1;
     let mut high: u8 = 95;
     let mut best: Vec<u8> = Vec::new();
 
+    // 使用原圖與目標算出參考中間值
     let ratio = target_bytes as f32 / raw_bytes_len as f32;
     let mut mid = (ratio * 95.0).clamp(1.0, 94.0) as u8;
 
     while low <= high {
-        let bytes = encode_jpeg_mozjpeg(img, mid)?;
+        let bytes = match out_ext {
+            "webp" => encode_webp(img, mid)?,
+            _ => encode_jpeg_mozjpeg(img, mid)?,
+        };
+
         let size = bytes.len() as u64;
         if size.abs_diff(target_bytes) <= tolerance {
             return Ok(bytes);
@@ -779,9 +892,47 @@ fn compress_to_target(
     }
 
     if best.is_empty() {
-        best = encode_jpeg_mozjpeg(img, 1)?;
+        best = match out_ext {
+            "webp" => encode_webp(img, 1)?,
+            _ => encode_jpeg_mozjpeg(img, 1)?,
+        };
     }
     Ok(best)
+}
+
+fn encode_jpeg_mozjpeg(rgb: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String> {
+    let (width, height) = rgb.dimensions();
+    let mut compress = mozjpeg::Compress::new(mozjpeg::ColorSpace::JCS_RGB);
+    compress.set_size(width as usize, height as usize);
+    compress.set_quality(quality as f32);
+
+    let mut buf = Vec::new();
+    let mut compress = compress
+        .start_compress(&mut buf)
+        .map_err(|e| format!("mozjpeg 初始化失敗: {}", e))?;
+
+    for row in rgb.as_raw().chunks(width as usize * 3) {
+        compress
+            .write_scanlines(row)
+            .map_err(|e| format!("mozjpeg 寫入失敗: {}", e))?;
+    }
+
+    compress
+        .finish()
+        .map_err(|e| format!("mozjpeg 完成失敗: {}", e))?;
+    Ok(buf)
+}
+
+fn encode_webp(rgb: &image::RgbImage, quality: u8) -> Result<Vec<u8>, String> {
+    let (width, height) = rgb.dimensions();
+    let encoder = webp::Encoder::from_rgb(rgb.as_raw(), width, height);
+    let mut config = webp::WebPConfig::new().map_err(|_| "WebP config 初始化失敗".to_string())?;
+    config.quality = quality as f32;
+    let encoded = encoder
+        .encode_advanced(&config)
+        .map_err(|_| "WebP 編碼失敗".to_string())?;
+
+    Ok(encoded.to_vec())
 }
 
 fn write_image(img: &image::RgbImage, out: &Path, ext: &str) -> Result<(), String> {
