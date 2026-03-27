@@ -35,10 +35,12 @@
 - 輸出結果顯示在UI上，可開啟輸出資料夾
 
 ### 支援格式
-`jpg` / `jpeg` / `png` / `gif` / `bmp` / `webp` / `tiff` / `tif`
+`jpg` / `jpeg` / `png` / `gif` / `bmp` / `webp` / `tiff` / `tif` / `heic` / `heif`
 
 > [!WARNING]
-> 支援格式會將無法壓縮的圖檔轉換為 `jpg` 格式進行壓縮且輸出
+> 目前僅支援輸出 `jpg` 和 `webp` 輸出
+> `heic` / `heif` 在 Windows OS 下須安裝 ImageMagick
+> Linux OS 不支援 `heic` / `heif` 輸入
 
 ---
 
@@ -120,3 +122,4 @@ image_tools/
 | `imageproc` | 繪圖演算法 |
 | `ab_glyph` | 處理字體 |
 | `chrono` | 日期時間處理函式庫 |
+| `webp` | 處理 `webp` 格式壓縮 |

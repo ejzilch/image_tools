@@ -27,6 +27,7 @@
     outputDirs,
   } from "./stores/progress.js";
   import { wmSettings } from "./stores/watermark.js";
+  import { outputFormat } from "./stores/format.js";
 
   // 狀態
   let mode = $state("shrink");
@@ -81,6 +82,7 @@
         height: Number(get(height)),
         ratio: Number(get(ratio)),
         watermark: enableWatermark ? buildWatermarkPayload() : null,
+        outputFormat: get(outputFormat),
       },
     }),
 
@@ -89,6 +91,7 @@
       payload: {
         inputs: files,
         watermark: buildWatermarkPayload(),
+        outputFormat: get(outputFormat),
       },
     }),
 
@@ -99,6 +102,7 @@
         customText: get(renameText).trim(),
         renameMode: get(renameMode),
         watermark: enableWatermark ? buildWatermarkPayload() : null,
+        outputFormat: get(outputFormat),
       },
     }),
 
@@ -110,6 +114,7 @@
           Number(get(targetSize)) *
           (get(targetUnit) === "kb" ? 1024 : 1024 * 1024),
         watermark: enableWatermark ? buildWatermarkPayload() : null,
+        outputFormat: get(outputFormat),
       },
     }),
   };
@@ -534,6 +539,18 @@
                 </svg> 設定
               </button>
             {/if}
+          </div>
+        </section>
+
+        <section>
+          <p class="label">輸出格式</p>
+          <div class="radio-group">
+            <label
+              ><input type="radio" bind:group={$outputFormat} value="webp" /> WebP</label
+            >
+            <label
+              ><input type="radio" bind:group={$outputFormat} value="jpeg" /> JPEG</label
+            >
           </div>
         </section>
       </section>
