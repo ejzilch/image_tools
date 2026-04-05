@@ -1,12 +1,23 @@
 <script>
     import { renameText, renameMode } from "../stores/rename.js";
+    import { outputFormat } from "../stores/format.js";
 
-    $: dateStr = new Date().toISOString().slice(0, 10);
+    const dateStr = new Date().toISOString().slice(0, 10);
 
-    $: preview =
-        $renameMode === "date_sequence"
-            ? `${$renameText || "photo"}_${dateStr}_00001.jpg`
-            : `${$renameText || "photo"}_00001.jpg`;
+    let fileExtension = $derived.by(() => {
+        const format = $outputFormat;
+        if (format === "webp") return ".webp";
+        if (format === "jpeg") return ".jpeg";
+        return "";
+    });
+
+    let preview = $derived.by(() => {
+        const baseName = $renameText || "photo";
+        if ($renameMode === "date_sequence") {
+            return `${baseName}_${dateStr}_00001${fileExtension}`;
+        }
+        return `${baseName}_00001${fileExtension}`;
+    });
 </script>
 
 <section>

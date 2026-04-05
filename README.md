@@ -38,8 +38,8 @@
 `jpg` / `jpeg` / `png` / `gif` / `bmp` / `webp` / `tiff` / `tif` / `heic` / `heif`
 
 > [!WARNING]
-> 目前僅支援輸出 `jpg` 和 `webp` 輸出
-> `heic` / `heif` 在 Windows OS 下須安裝 ImageMagick
+> 目前僅支援輸出 `jpg` 和 `webp` 輸出<br>
+> `heic` / `heif` 在 Windows OS 下須安裝 ImageMagick<br>
 > Linux OS 不支援 `heic` / `heif` 輸入
 
 ---
