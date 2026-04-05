@@ -880,7 +880,6 @@ fn compress_to_target(
             best = bytes;
             low = mid + 1;
         } else {
-            // 避免 overflow
             high = mid.saturating_sub(1);
         }
 
